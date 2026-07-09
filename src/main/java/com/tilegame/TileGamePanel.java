@@ -47,6 +47,7 @@ class TileGamePanel extends PluginPanel
     private final TileGamePlugin plugin;
     private final JLabel modeValue = valueLabel();
     private final JLabel groupValue = valueLabel();
+    private final JLabel winnerValue = valueLabel();
     private final JLabel timeValue = valueLabel();
     private final JPanel levelsPanel = new JPanel();
     private final JPanel levelCreationPanel = new JPanel();
@@ -87,11 +88,9 @@ class TileGamePanel extends PluginPanel
                 currentGamePanel(),
                 "Current Game explains what the plugin is tracking right now.\n\n" +
                         "Mode shows what Tile Game is currently doing: IDLE means nothing is active, CHOOSE means left-clicked tiles are being picked for a new group, EDIT means an existing group is being changed, COUNTDOWN means a run is about to start, LEVEL means a timed run is active, and DONE means your last run finished.\n\n" +
-                        "Group is the level/group currently being edited, played, imported, exported, or most recently saved. A dash means no group is active.\n\n" +
-                        "Ticks counts game ticks during the current run. One RuneScape tick is about 0.6 seconds.\n\n" +
-                        "Missed counts ticks where you did not claim a fresh level tile. Fewer missed ticks usually means a cleaner route.\n\n" +
-                        "Revisits counts times you moved onto a tile that had already been visited during this run.\n\n" +
-                        "Grade previews the current S-through-D run grade once a run starts. Groups is the number of saved levels."
+                        "Level shows the level/group currently being edited, played, imported, exported, or most recently saved. After a multiplayer match, it shows the level that was just played.\n\n" +
+                        "Winner shows the username that won the last multiplayer match.\n\n" +
+                        "Time shows the last run time, or the winner's time after a multiplayer match. One RuneScape tick is about 0.6 seconds."
         ), 2);
         addFullWidth(content, card(
                 "Levels",
@@ -118,7 +117,9 @@ class TileGamePanel extends PluginPanel
         SwingUtilities.invokeLater(() ->
         {
             modeValue.setText(plugin.getMode().name());
-            groupValue.setText(blankToDash(plugin.getActiveGroupName()));
+            groupValue.setText(blankToDash(plugin.getDisplayedMultiplayerLevelLabel()));
+            winnerValue.setText(blankToDash(plugin.getDisplayedMultiplayerWinnerLabel()));
+            timeValue.setText(blankToDash(plugin.getDisplayedMultiplayerWinnerTimeLabel()));
             if (sequenceCheckbox != null)
             {
                 sequenceCheckbox.setSelected(plugin.isSequenceModeEnabled());
@@ -153,7 +154,6 @@ class TileGamePanel extends PluginPanel
             {
                 clearButton.setEnabled(!plugin.getPaintedTiles().isEmpty());
             }
-            timeValue.setText(plugin.getLastRunTimeLabel());
             updateMultiplayerControls();
         });
     }
@@ -260,6 +260,7 @@ class TileGamePanel extends PluginPanel
 
             addRow(panel, "Mode", modeValue);
             addRow(panel, "Level", groupValue);
+            addRow(panel, "Winner", winnerValue);
             addRow(panel, "Time", timeValue);
 
         return panel;
@@ -450,24 +451,56 @@ class TileGamePanel extends PluginPanel
         multiplayerPanel.add(status);
         multiplayerPanel.add(javax.swing.Box.createVerticalStrut(8));
 
-        if (plugin.canStartMultiplayerGame())
+        if (plugin.isInMultiplayerLobby() && !plugin.isMultiplayerActive())
         {
-            JButton startButton = iconButton("Start Multiplayer", "Start the hosted multiplayer game", plugin::startMultiplayerGame);
-            startButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-            multiplayerPanel.add(startButton);
+            JPanel lobbyActions = new JPanel(new GridLayout(1, plugin.isMultiplayerHost() ? 2 : 1, 5, 0));
+            lobbyActions.setBackground(SECTION_BACKGROUND);
+            lobbyActions.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+            if (plugin.canStartMultiplayerGame())
+            {
+                lobbyActions.add(iconButton("Start Multiplayer", "Start the hosted multiplayer game", plugin::startMultiplayerGame));
+            }
+
+            if (plugin.isMultiplayerHost())
+            {
+                lobbyActions.add(iconButton("Close Lobby", "Close the hosted multiplayer lobby for everyone", plugin::closeMultiplayerLobby));
+            }
+            else
+            {
+                lobbyActions.add(iconButton("Leave Lobby", "Leave the current multiplayer lobby", plugin::leaveMultiplayerLobby));
+            }
+
+            multiplayerPanel.add(lobbyActions);
             multiplayerPanel.add(javax.swing.Box.createVerticalStrut(8));
         }
 
         List<TileGameMultiplayerMessage> invites = plugin.getPendingMultiplayerInvites();
-        for (TileGameMultiplayerMessage invite : invites)
+        if (!invites.isEmpty())
         {
-            JButton inviteButton = iconButton(
-                    "Invite Pending",
-                    "View invite from " + invite.host,
-                    () -> plugin.showPendingMultiplayerInvite(invite, this)
-            );
-            inviteButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-            multiplayerPanel.add(inviteButton);
+            JPanel invitePanel = new JPanel();
+            invitePanel.setLayout(new BoxLayout(invitePanel, BoxLayout.Y_AXIS));
+            invitePanel.setBackground(SECTION_BACKGROUND);
+            invitePanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+            for (int i = 0; i < invites.size(); i++)
+            {
+                TileGameMultiplayerMessage invite = invites.get(i);
+                String host = invite.host == null || invite.host.trim().isEmpty() ? "unknown" : invite.host.trim();
+                JButton inviteButton = iconButton(
+                        "Invite Pending [" + host + "]",
+                        "View invite from " + host,
+                        () -> plugin.showPendingMultiplayerInvite(invite, this)
+                );
+                inviteButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+                invitePanel.add(inviteButton);
+                if (i < invites.size() - 1)
+                {
+                    invitePanel.add(javax.swing.Box.createVerticalStrut(6));
+                }
+            }
+
+            multiplayerPanel.add(invitePanel);
         }
 
         multiplayerPanel.revalidate();

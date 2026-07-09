@@ -12,6 +12,7 @@ final class TileGameMultiplayerMessage
     String winner;
     String reason;
     String error;
+    int totalTicks;
     List<String> invitedPlayers;
     List<String> deliveredPlayers;
     List<String> queuedPlayers;

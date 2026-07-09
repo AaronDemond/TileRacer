@@ -86,7 +86,7 @@ public class TileGamePlugin extends Plugin
     private static final String CONFIG_GROUP = "tilegame";
     private static final String CONFIG_SAVE_KEY = "savedData";
     private static final int COUNTDOWN_START_TICKS = 3;
-    private static final int OVERHEAD_MESSAGE_CYCLES = 100;
+    private static final int OVERHEAD_MESSAGE_CYCLES = 300;
     private static final int SEQUENCE_HARD_BONUS_TICKS = 3;
     private static final double SEQUENCE_HARD_BONUS_SPAWN_CHANCE = 0.10;
     private static final double DANGER_TILE_SPAWN_CHANCE = 0.25;
@@ -198,6 +198,9 @@ public class TileGamePlugin extends Plugin
     private volatile String multiplayerLevelName = "";
     private volatile boolean multiplayerHost = false;
     private volatile boolean multiplayerActive = false;
+    private volatile String multiplayerSummaryLevelName = "";
+    private volatile String multiplayerSummaryWinner = "";
+    private volatile String multiplayerSummaryWinnerTimeLabel = "";
     private boolean multiplayerSequenceMode = false;
     private boolean multiplayerAddDisablers = false;
     private boolean multiplayerDangerTiles = false;
@@ -605,10 +608,11 @@ public class TileGamePlugin extends Plugin
             message.host = currentPlayerName();
             message.level = createMultiplayerLevelSnapshot(multiplayerLevelName);
             setMultiplayerModifierSnapshot(message.level);
+            clearMultiplayerSummary();
             sendMultiplayerMessage(message);
             multiplayerActive = true;
             playGroup(multiplayerLevelName);
-        });
+            });
     }
 
     private List<String> onlineFriendNames()
@@ -646,6 +650,7 @@ public class TileGamePlugin extends Plugin
         multiplayerLevelName = groupName;
         multiplayerHost = true;
         multiplayerActive = false;
+        clearMultiplayerSummary();
         setMultiplayerModifierSnapshot(pendingSequenceMode, pendingAddDisablers, pendingDangerTiles, pendingDirectionalTiles, pendingHardMode);
         multiplayerPlayers.clear();
         multiplayerPlayers.add(currentPlayerName());
@@ -675,6 +680,7 @@ public class TileGamePlugin extends Plugin
         multiplayerLevelName = normalizeGroupName(invite.levelName == null ? invite.level.name : invite.levelName);
         multiplayerHost = false;
         multiplayerActive = false;
+        clearMultiplayerSummary();
         setMultiplayerModifierSnapshot(invite.level);
         multiplayerPlayers.clear();
         if (invite.host != null)
@@ -753,7 +759,15 @@ public class TileGamePlugin extends Plugin
             case "game_over":
                 clientThread.invokeLater(() -> handleMultiplayerGameOver(message));
                 break;
+            case "lobby_closed":
+                clientThread.invokeLater(() -> handleMultiplayerLobbyClosed(message));
+                break;
             case "error":
+                if (message.roomId != null)
+                {
+                    pendingMultiplayerInvites.removeIf(existing -> message.roomId.equals(existing.roomId));
+                    updatePanel();
+                }
                 say(message.error == null ? "Tile Game multiplayer server error." : message.error);
                 break;
             case "invite_sent":
@@ -840,6 +854,7 @@ public class TileGamePlugin extends Plugin
         }
 
         multiplayerActive = true;
+        clearMultiplayerSummary();
         if (message.level != null)
         {
             setMultiplayerModifierSnapshot(message.level);
@@ -866,6 +881,11 @@ public class TileGamePlugin extends Plugin
             return;
         }
 
+        String levelName = normalizeGroupName(message.levelName == null ? multiplayerLevelName : message.levelName);
+        multiplayerSummaryLevelName = levelName;
+        multiplayerSummaryWinner = safeCreator(message.winner);
+        multiplayerSummaryWinnerTimeLabel = message.totalTicks > 0 ? formatTicks(message.totalTicks) : "-";
+        activeGroupName = levelName;
         multiplayerActive = false;
         mode = TileGameMode.DONE;
         resetRunState();
@@ -879,7 +899,35 @@ public class TileGamePlugin extends Plugin
         showOverhead("Multiplayer game over! Winner: " + safeCreator(message.winner) + "." + reason);
     }
 
-    private void leaveMultiplayerLobby()
+    private void handleMultiplayerLobbyClosed(TileGameMultiplayerMessage message)
+    {
+        if (message.roomId != null)
+        {
+            pendingMultiplayerInvites.removeIf(existing -> message.roomId.equals(existing.roomId));
+        }
+
+        if (!multiplayerRoomId.equals(message.roomId))
+        {
+            updatePanel();
+            return;
+        }
+
+        multiplayerActive = false;
+        multiplayerRoomId = "";
+        multiplayerLevelName = "";
+        multiplayerHost = false;
+        clearMultiplayerModifierSnapshot();
+        multiplayerPlayers.clear();
+        updatePanel();
+        showOverhead("Tile Game lobby closed.");
+    }
+
+    void closeMultiplayerLobby()
+    {
+        leaveMultiplayerLobby();
+    }
+
+    void leaveMultiplayerLobby()
     {
         if (multiplayerRoomId.isEmpty())
         {
@@ -887,7 +935,7 @@ public class TileGamePlugin extends Plugin
         }
 
         TileGameMultiplayerMessage message = new TileGameMultiplayerMessage();
-        message.type = "leave";
+        message.type = multiplayerHost && !multiplayerActive ? "close" : "leave";
         message.roomId = multiplayerRoomId;
         message.player = currentPlayerName();
         sendMultiplayerMessage(message);
@@ -897,6 +945,37 @@ public class TileGamePlugin extends Plugin
         multiplayerActive = false;
         clearMultiplayerModifierSnapshot();
         multiplayerPlayers.clear();
+        updatePanel();
+    }
+
+    boolean isMultiplayerHost()
+    {
+        return multiplayerHost;
+    }
+
+    boolean isInMultiplayerLobby()
+    {
+        return !multiplayerRoomId.isEmpty();
+    }
+
+    boolean isMultiplayerActive()
+    {
+        return multiplayerActive;
+    }
+
+    String getDisplayedMultiplayerLevelLabel()
+    {
+        return multiplayerSummaryLevelName.isEmpty() ? activeGroupName : multiplayerSummaryLevelName;
+    }
+
+    String getDisplayedMultiplayerWinnerLabel()
+    {
+        return multiplayerSummaryLevelName.isEmpty() ? "" : multiplayerSummaryWinner;
+    }
+
+    String getDisplayedMultiplayerWinnerTimeLabel()
+    {
+        return multiplayerSummaryLevelName.isEmpty() ? getLastRunTimeLabel() : multiplayerSummaryWinnerTimeLabel;
     }
 
         void setActiveModifierTool(TileModifier modifier)
@@ -3005,6 +3084,7 @@ public class TileGamePlugin extends Plugin
             message.type = "finish";
             message.roomId = multiplayerRoomId;
             message.player = currentPlayerName();
+            message.totalTicks = totalRunTicks;
             sendMultiplayerMessage(message);
         }
 
@@ -3332,6 +3412,13 @@ public class TileGamePlugin extends Plugin
         multiplayerDangerTiles = false;
         multiplayerDirectionalTiles = false;
         multiplayerHardMode = false;
+    }
+
+    private void clearMultiplayerSummary()
+    {
+        multiplayerSummaryLevelName = "";
+        multiplayerSummaryWinner = "";
+        multiplayerSummaryWinnerTimeLabel = "";
     }
 
     private TileGameMultiplayerState createMultiplayerStateSnapshot()
@@ -4087,7 +4174,12 @@ public class TileGamePlugin extends Plugin
             return "-";
         }
 
-        return String.format("%.1fs", lastRunTicks * 0.6);
+        return formatTicks(lastRunTicks);
+    }
+
+    private String formatTicks(int ticks)
+    {
+        return String.format("%.1fs", ticks * 0.6);
     }
 
     boolean isViewingGroup(String groupName)
