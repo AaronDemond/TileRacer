@@ -12,6 +12,7 @@ import java.awt.GridLayout;
 import java.awt.Insets;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
@@ -59,6 +60,9 @@ class TileGamePanel extends PluginPanel
         private JCheckBox hardModeCheckbox;
     private JButton paintButton;
     private JButton clearButton;
+        private JButton restartButton;
+        private JButton stopButton;
+        private final Map<String, List<JButton>> levelActionButtons = new HashMap<>();
 
     TileGamePanel(TileGamePlugin plugin)
     {
@@ -149,11 +153,21 @@ class TileGamePanel extends PluginPanel
             if (paintButton != null)
             {
                 paintButton.setText(plugin.isPaintMode() ? "Painting" : "Paint");
+                paintButton.setEnabled(plugin.canUsePaintButton());
             }
             if (clearButton != null)
             {
                 clearButton.setEnabled(!plugin.getPaintedTiles().isEmpty());
             }
+            if (restartButton != null)
+            {
+                restartButton.setEnabled(plugin.canReplayCurrentGame());
+            }
+            if (stopButton != null)
+            {
+                stopButton.setEnabled(true);
+            }
+            updateLevelActionButtons();
             updateMultiplayerControls();
         });
     }
@@ -163,6 +177,7 @@ class TileGamePanel extends PluginPanel
         SwingUtilities.invokeLater(() ->
         {
             levelsPanel.removeAll();
+            levelActionButtons.clear();
 
             if (groups.isEmpty())
             {
@@ -292,8 +307,10 @@ class TileGamePanel extends PluginPanel
     {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         panel.setBackground(SECTION_BACKGROUND);
-        panel.add(iconButton("↻", "Restart current level", plugin::restartCurrentGame));
-        panel.add(iconButton("■", "Stop current game", plugin::stopCurrentGame));
+        restartButton = iconButton("↻", "Restart current level", plugin::restartCurrentGame);
+        stopButton = iconButton("■", "Stop current game", plugin::stopCurrentGame);
+        panel.add(restartButton);
+        panel.add(stopButton);
         return panel;
     }
 
@@ -451,6 +468,21 @@ class TileGamePanel extends PluginPanel
         multiplayerPanel.add(status);
         multiplayerPanel.add(javax.swing.Box.createVerticalStrut(8));
 
+        if (plugin.isInMultiplayerLobby())
+        {
+            String levelName = plugin.getMultiplayerLevelName();
+            boolean canPreview = levelName != null && !levelName.isEmpty() && plugin.getGroups().containsKey(levelName);
+            JButton previewButton = iconButton(
+                    plugin.isViewingGroup(levelName) ? "Hide Preview" : "Preview",
+                    "Show or hide the multiplayer level preview",
+                    () -> plugin.toggleViewGroup(levelName)
+            );
+            previewButton.setEnabled(canPreview);
+            previewButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+            multiplayerPanel.add(previewButton);
+            multiplayerPanel.add(javax.swing.Box.createVerticalStrut(8));
+        }
+
         if (plugin.isInMultiplayerLobby() && !plugin.isMultiplayerActive())
         {
             JPanel lobbyActions = new JPanel(new GridLayout(1, plugin.isMultiplayerHost() ? 2 : 1, 5, 0));
@@ -545,13 +577,20 @@ class TileGamePanel extends PluginPanel
         {
             JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
             actionRow.setBackground(SECTION_BACKGROUND);
-            actionRow.add(iconButton("💾 Save", "Save selected tiles as a level", this::saveCurrentSelection));
-            actionRow.add(iconButton("🗑 Delete", "Trash current level selection", plugin::trashCurrentLevelSelection));
+            JButton saveButton = iconButton("💾 Save", "Save selected tiles as a level", this::saveCurrentSelection);
+            JButton trashButton = iconButton("🗑 Delete", "Trash current level selection", plugin::trashCurrentLevelSelection);
+            boolean controlsEnabled = plugin.canUseLevelPanelControls();
+            saveButton.setEnabled(controlsEnabled);
+            trashButton.setEnabled(controlsEnabled);
+            actionRow.add(saveButton);
+            actionRow.add(trashButton);
 
             TileModifier activeTool = plugin.getActiveModifierTool();
             JPanel modifierRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
             modifierRow.setBackground(SECTION_BACKGROUND);
-            modifierRow.add(modifierToolButton("★ Bonus", TileModifier.BONUS, activeTool));
+            JButton bonusButton = modifierToolButton("★ Bonus", TileModifier.BONUS, activeTool);
+            bonusButton.setEnabled(controlsEnabled);
+            modifierRow.add(bonusButton);
 
             levelCreationPanel.add(actionRow);
             levelCreationPanel.add(modifierRow);
@@ -560,7 +599,9 @@ class TileGamePanel extends PluginPanel
         {
             JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
             actionRow.setBackground(SECTION_BACKGROUND);
-            actionRow.add(iconButton("+ New", "Create a new level", plugin::startNewLevelSelection));
+            JButton newButton = iconButton("+ New", "Create a new level", plugin::startNewLevelSelection);
+            newButton.setEnabled(plugin.canUseLevelPanelControls());
+            actionRow.add(newButton);
             levelCreationPanel.add(actionRow);
         }
 
@@ -633,14 +674,14 @@ class TileGamePanel extends PluginPanel
 
         JPanel actions = new JPanel(new GridLayout(1, 4, 4, 0));
         actions.setOpaque(false);
-        actions.add(iconButton(
+        JButton viewButton = iconButton(
                 plugin.isViewingGroup(groupName) ? "◌" : "👁",
                 (plugin.isViewingGroup(groupName) ? "Hide " : "View ") + groupName,
                 () -> plugin.toggleViewGroup(groupName)
-        ));
-        actions.add(iconButton("▶", "Play " + groupName, () -> plugin.playGroup(groupName)));
-        actions.add(iconButton("✎", "Edit " + groupName, () -> plugin.editGroup(groupName)));
-        actions.add(iconButton("×", "Delete " + groupName, () -> {
+        );
+        JButton playButton = iconButton("▶", "Play " + groupName, () -> plugin.playGroup(groupName));
+        JButton editButton = iconButton("✎", "Edit " + groupName, () -> plugin.editGroup(groupName));
+        JButton deleteButton = iconButton("×", "Delete " + groupName, () -> {
             int res = JOptionPane.showConfirmDialog(TileGamePanel.this,
                     "Delete level '" + groupName + "'? This cannot be undone.",
                     "Confirm delete",
@@ -651,11 +692,36 @@ class TileGamePanel extends PluginPanel
             {
                 plugin.deleteGroup(groupName);
             }
-        }));
+        });
+
+        boolean controlsEnabled = plugin.canUseLevelPanelControls();
+        viewButton.setEnabled(controlsEnabled);
+        playButton.setEnabled(controlsEnabled);
+        editButton.setEnabled(controlsEnabled);
+        deleteButton.setEnabled(controlsEnabled);
+
+        actions.add(viewButton);
+        actions.add(playButton);
+        actions.add(editButton);
+        actions.add(deleteButton);
+
+        levelActionButtons.put(groupName, List.of(viewButton, playButton, editButton, deleteButton));
 
         row.add(label, BorderLayout.CENTER);
         row.add(actions, BorderLayout.EAST);
         return row;
+    }
+
+    private void updateLevelActionButtons()
+    {
+        boolean enabled = plugin.canUseLevelPanelControls();
+        levelActionButtons.values().forEach(buttons ->
+        {
+            for (JButton button : buttons)
+            {
+                button.setEnabled(enabled);
+            }
+        });
     }
 
     private JButton iconButton(String text, String tooltip, Runnable action)

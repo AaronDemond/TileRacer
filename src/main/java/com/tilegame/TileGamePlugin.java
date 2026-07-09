@@ -622,11 +622,29 @@ public class TileGamePlugin extends Plugin
         return role + " " + multiplayerLevelName + " (" + multiplayerPlayers.size() + " players)";
     }
 
+    String getMultiplayerLevelName()
+    {
+        return multiplayerLevelName;
+    }
+
     void startMultiplayerGame()
+    {
+        startOrRestartMultiplayerGame(false);
+    }
+
+    private void startOrRestartMultiplayerGame(boolean restarting)
     {
         clientThread.invokeLater(() ->
         {
-            if (!canStartMultiplayerGame())
+            if (restarting)
+            {
+                if (!multiplayerHost || !multiplayerActive || multiplayerRoomId.isEmpty())
+                {
+                    showHelpOverhead("Create a multiplayer lobby before restarting.");
+                    return;
+                }
+            }
+            else if (!canStartMultiplayerGame())
             {
                 showHelpOverhead("Create a multiplayer lobby before starting.");
                 return;
@@ -642,7 +660,7 @@ public class TileGamePlugin extends Plugin
             sendMultiplayerMessage(message);
             multiplayerActive = true;
             playGroup(multiplayerLevelName);
-            });
+        });
     }
 
     private List<String> onlineFriendNames()
@@ -1081,7 +1099,7 @@ public class TileGamePlugin extends Plugin
             return;
         }
 
-        clearDisablersFromReset(clearedTile);
+        clearDisablersFromReset(clearedTile, message.tick);
         broadcastMultiplayerStateIfHost();
         updatePanel();
     }
@@ -1271,6 +1289,12 @@ public class TileGamePlugin extends Plugin
     void restartCurrentGame()
     {
         String groupName = activeGroupName;
+
+        if (multiplayerHost && multiplayerActive && !multiplayerRoomId.isEmpty())
+        {
+            startOrRestartMultiplayerGame(true);
+            return;
+        }
 
         if (groupName == null || groupName.isEmpty() || !groups.containsKey(groupName))
         {
@@ -3061,20 +3085,56 @@ public class TileGamePlugin extends Plugin
 
     // Clears active disablers when the player steps on the reset (blue) tile.
     // No countdown is started — disablers will continue spawning at the flat 10% rate.
-    private void clearDisablersFromReset(WorldPoint fromTile)
+    private void clearDisablersFromReset(WorldPoint fromTile, int clearTick)
     {
         disabledTileTimers.clear();
         resetDisabledTile = null;
         resetTile = null;
         if (isSequenceModeEnabled())
         {
-            sequenceShrinkDelay = 1;
-            sequenceShrinkDelaySetTick = client.getTickCount();
+            primeSequenceShrinkDelay(clearTick);
         }
     }
 
+    private void primeSequenceShrinkDelay(int clearTick)
+    {
+        int currentTick = client.getTickCount();
+        int effectiveClearTick = clearTick > 0 ? clearTick : currentTick;
+        int elapsedTicks = Math.max(0, currentTick - effectiveClearTick);
+
+        if (elapsedTicks >= 2)
+        {
+            sequenceShrinkDelay = 0;
+            sequenceShrinkDelaySetTick = -1;
+            return;
+        }
+
+        sequenceShrinkDelay = 1;
+        sequenceShrinkDelaySetTick = effectiveClearTick;
+    }
+
+    boolean canUseLevelPanelControls()
+    {
+        return !multiplayerActive;
+    }
+
+    boolean canUsePaintButton()
+    {
+        return !multiplayerActive;
+    }
+
+    boolean canReplayCurrentGame()
+    {
+        if (multiplayerRoomId.isEmpty())
+        {
+            return true;
+        }
+
+        return multiplayerHost && multiplayerActive;
+    }
+
     // Participant-side: ask the host to clear the disablers after stepping on the reset tile
-    private void requestMultiplayerDisablerClear(WorldPoint tile)
+    private void requestMultiplayerDisablerClear(WorldPoint tile, int clearTick)
     {
         if (disabledTileTimers.isEmpty() || tile.equals(lastDisablerClearRequestTile))
         {
@@ -3087,6 +3147,7 @@ public class TileGamePlugin extends Plugin
         message.roomId = multiplayerRoomId;
         message.player = currentPlayerName();
         message.tile = toMultiplayerTile(tile);
+        message.tick = clearTick;
         sendMultiplayerMessage(message);
     }
 
@@ -3175,11 +3236,11 @@ public class TileGamePlugin extends Plugin
                     if (multiplayerParticipant)
                     {
                         // Participants ask the host to clear disablers for everyone
-                        requestMultiplayerDisablerClear(currentTile);
+                        requestMultiplayerDisablerClear(currentTile, currentTick);
                     }
                     else
                     {
-                        clearDisablersFromReset(currentTile);
+                        clearDisablersFromReset(currentTile, currentTick);
                     }
                 }
 
@@ -3829,6 +3890,7 @@ public class TileGamePlugin extends Plugin
         state.totalRunTicks = totalRunTicks;
         state.currentSequenceNumber = currentSequenceNumber;
         state.sequenceShrinkDelay = sequenceShrinkDelay;
+        state.sequenceShrinkDelaySetTick = sequenceShrinkDelaySetTick;
         state.activeLevelTiles = toMultiplayerTiles(activeLevelGroupTiles);
         state.runColoredTiles = toMultiplayerTiles(getAllColoredTiles());
         state.position = toMultiplayerTile(getCurrentPlayerTile());
@@ -3890,6 +3952,7 @@ public class TileGamePlugin extends Plugin
         {
             currentSequenceNumber = state.currentSequenceNumber;
             sequenceShrinkDelay = state.sequenceShrinkDelay;
+            sequenceShrinkDelaySetTick = state.sequenceShrinkDelay > 0 ? state.sequenceShrinkDelaySetTick : -1;
             replaceSet(validSequenceTiles, fromMultiplayerTiles(state.validSequenceTiles));
             replaceTimedMap(sequenceTileTimers, state.sequenceTileTimers);
             if (isMultiplayerParticipant())
@@ -3901,6 +3964,7 @@ public class TileGamePlugin extends Plugin
         {
             currentSequenceNumber = state.currentSequenceNumber;
             sequenceShrinkDelay = state.sequenceShrinkDelay;
+            sequenceShrinkDelaySetTick = state.sequenceShrinkDelay > 0 ? state.sequenceShrinkDelaySetTick : -1;
             validSequenceTiles.clear();
             sequenceTileTimers.clear();
             selectNextValidTiles();

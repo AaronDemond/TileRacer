@@ -14,6 +14,7 @@ final class TileGameMultiplayerMessage
     String error;
     int totalTicks;
     int sequenceNumber;
+    int tick;
     List<String> invitedPlayers;
     List<String> deliveredPlayers;
     List<String> queuedPlayers;
@@ -49,6 +50,7 @@ final class TileGameMultiplayerState
     int totalRunTicks;
     int currentSequenceNumber;
     int sequenceShrinkDelay;
+    int sequenceShrinkDelaySetTick;
     List<TileGameMultiplayerTile> activeLevelTiles;
     List<TileGameMultiplayerTile> runColoredTiles;
     TileGameMultiplayerTile position;
