@@ -608,7 +608,8 @@ public class TileGamePlugin extends Plugin
 
     boolean canStartMultiplayerGame()
     {
-        return multiplayerHost && !multiplayerRoomId.isEmpty() && !multiplayerActive;
+        // Require the host plus at least one other participant before allowing start
+        return multiplayerHost && !multiplayerRoomId.isEmpty() && !multiplayerActive && multiplayerPlayers.size() > 1;
     }
 
     String getMultiplayerStatusLabel()
@@ -975,14 +976,6 @@ public class TileGamePlugin extends Plugin
         Set<WorldPoint> incomingColoredTiles = fromMultiplayerTiles(message.state.runColoredTiles);
         multiplayerParticipantColoredTiles.put(message.player, incomingColoredTiles);
         multiplayerParticipantPositions.put(message.player, fromMultiplayerTile(message.state.position));
-
-        for (WorldPoint tile : incomingColoredTiles)
-        {
-            if (!runColoredTiles.containsKey(tile))
-            {
-                runColoredTiles.put(tile, randomColor());
-            }
-        }
     }
 
     private void handleMultiplayerSequenceClaim(TileGameMultiplayerMessage message)
@@ -1013,10 +1006,6 @@ public class TileGamePlugin extends Plugin
                 .computeIfAbsent(message.player, ignored -> new HashSet<>())
                 .add(claimedTile);
         multiplayerParticipantPositions.put(message.player, claimedTile);
-        if (!runColoredTiles.containsKey(claimedTile))
-        {
-            runColoredTiles.put(claimedTile, randomColor());
-        }
 
         if (message.sequenceNumber == currentSequenceNumber)
         {
@@ -3440,7 +3429,7 @@ public class TileGamePlugin extends Plugin
             }
         }
 
-        Set<WorldPoint> coloredTiles = multiplayerActive ? getAllColoredTiles() : runColoredTiles.keySet();
+        Set<WorldPoint> coloredTiles = runColoredTiles.keySet();
         if (mode == TileGameMode.LEVEL
                 && !activeLevelGroupTiles.isEmpty()
                 && !coloredTiles.containsAll(activeLevelGroupTiles))
@@ -3713,21 +3702,127 @@ public class TileGamePlugin extends Plugin
 
     void showHowToPlay()
     {
+        final String HELP_TEXT =
+                "INTRODUCTION\n" +
+                        "\n" +
+                        "TileRacer is a plugin where you are challenged with coloring all the tiles in various configurations as fast as you can by stepping on them.\n" +
+                        "There are many mechanics and modifiers that make this more difficult than it sounds. You can play by yourself or compete against friends in real time.\n" +
+                        "Anyone can create and share new configurations, and your client tracks your highscores as you improve.\n" +
+                        "\n" +
+                        "WARNING\n" +
+                        "\n" +
+                        "This plugin submits your username and details about your in-game location to a third-party server while playing in multiplayer mode.\n" +
+                        "No information about you is stored.\n" +
+                        "\n" +
+                        "CONFIGURING A LEVEL FOR PLAY\n" +
+                        "\n" +
+                        "1. Click the \"New\" button in the levels panel.\n" +
+                        "\n" +
+                        "2. Click on tiles to mark them as part of the circuit.\n" +
+                        "   Marked tiles will appear black.\n" +
+                        "\n" +
+                        "   - Click a marked tile again to unmark it.\n" +
+                        "   - Hold Ctrl to move your character while editing.\n" +
+                        "   - Click the \"Bonus\" button to place a special bonus tile.\n" +
+                        "     Bonus tiles reward the player with multiple colored tiles.\n" +
+                        "     They are not required to finish the game.\n" +
+                        "\n" +
+                        "3. Click Save to save the layout, or Delete to discard it.\n" +
+                        "\n" +
+                        "After saving, each level has these options next to it:\n" +
+                        "\n" +
+                        "   - Eye: preview the level.\n" +
+                        "   - Play: start a game on that level.\n" +
+                        "   - Pencil: edit the level.\n" +
+                        "   - X: remove the level.\n" +
+                        "\n" +
+                        "PLAYING A GAME\n" +
+                        "\n" +
+                        "There are two ways to play: solo and with friends.\n" +
+                        "\n" +
+                        "SOLO PLAY\n" +
+                        "\n" +
+                        "To play alone, configure your mechanics using the check boxes in the levels card, then click the Play button next to the level you want to play.\n" +
+                        "\n" +
+                        "MULTIPLAYER\n" +
+                        "\n" +
+                        "To play with friends, one person hosts the match by clicking Multiplayer, choosing the level, and selecting the friends who will receive an invite.\n" +
+                        "Invited players will see an \"Invite Pending\" button appear in the multiplayer panel. They can accept or decline.\n" +
+                        "\n" +
+                        "Once the host is satisfied that all participants have joined, the host clicks \"Start Multiplayer\" and a live, synced game begins between all players.\n" +
+                        "All mechanics and modifiers act the same for every player, so nothing is left up to RNG.\n" +
+                        "\n" +
+                        "The game ends when someone colors all the tiles. The winner is then broadcast to all players.\n" +
+                        "\n" +
+                        "LEAVING A GAME\n" +
+                        "\n" +
+                        "If you want to leave a game, click the Stop button in the game state card.\n" +
+                        "If the host ends the game, it stops for everybody.\n" +
+                        "\n" +
+                        "GAME MECHANICS\n" +
+                        "\n" +
+                        "There are a number of mechanics you can enable before starting a match.\n" +
+                        "\n" +
+                        "SEQUENCE MODE\n" +
+                        "\n" +
+                        "This mode forces you to choose between a small number of tiles that disappear quickly.\n" +
+                        "Valid tiles have a number on them that counts down every tick.\n" +
+                        "When the number reaches 0, that tile is no longer a valid move.\n" +
+                        "You must prioritize coloring tiles quickly, while also avoiding tiles you cannot reach in time.\n" +
+                        "\n" +
+                        "DISABLERS\n" +
+                        "\n" +
+                        "Disablers are special modifiers that randomly appear with a red border.\n" +
+                        "They prevent you from coloring the tile they spawn on.\n" +
+                        "Disablers must be cleared by stepping on the blue-bordered tile that appears.\n" +
+                        "\n" +
+                        "DANGER TILES\n" +
+                        "\n" +
+                        "Danger tiles first appear with a small yellow countdown.\n" +
+                        "When the countdown reaches zero, the whole tile turns yellow and becomes active.\n" +
+                        "For every tick you stand on an active danger tile, one of your previously colored tiles becomes uncolored and must be colored again.\n" +
+                        "\n" +
+                        "DIRECTIONAL TILES\n" +
+                        "\n" +
+                        "Directional tiles are marked with green text representing a direction, such as NW for north-west.\n" +
+                        "These tiles can only be colored by walking onto them from the shown direction.\n" +
+                        "\n" +
+                        "HARD MODE\n" +
+                        "\n" +
+                        "Hard mode automatically enables disablers, danger tiles, and directional tiles.\n" +
+                        "Hard mode scores are placed in a separate category from normal runs.\n" +
+                        "\n" +
+                        "OTHER PLUGIN FUNCTIONS\n" +
+                        "\n" +
+                        "EXPORT\n" +
+                        "\n" +
+                        "Export copies level data to your system clipboard.\n" +
+                        "If you send this data to another user, they can import your level.\n" +
+                        "\n" +
+                        "IMPORT\n" +
+                        "\n" +
+                        "Import reads level data from your clipboard.\n" +
+                        "If the data is a valid level design, the level will be added to your plugin.\n" +
+                        "\n" +
+                        "PAINT\n" +
+                        "\n" +
+                        "Paint lets you freely color tiles as you walk around the game.\n" +
+                        "There is no score and no modifiers. It is just colorful tile vomit.\n" +
+                        "\n" +
+                        "CLEAR\n" +
+                        "\n" +
+                        "Clear removes any tiles you have painted with the Paint command.\n" +
+                        "\n" +
+                        "SCORES\n" +
+                        "\n" +
+                        "Shows the highscores.\n" +
+                        "\n" +
+                        "HELP\n" +
+                        "\n" +
+                        "Shows this help text.\n";
         SwingUtilities.invokeLater(() ->
         {
-            JTextArea text = new JTextArea(
-                    "Tile Game is a tiny tile-racing trainer with a silly hat and a clipboard.\n\n" +
-                            "How a run works:\n" +
-                            "Pick a saved level, press play, wait for 3-2-1-GO, then run over every black target tile. A tile turns colorful when you claim it. Try to claim a new target tile every tick without doubling back.\n\n" +
-                            "Grades:\n" +
-                            "Every completed run gets S, A, B, C, or D. The score starts at 100, loses points for the percentage of ticks where you did not claim a new target tile, and loses much more for revisiting tiles. Revisits are intentionally spicy: each revisit costs 2.5x as much as the same percentage of missed ticks.\n\n" +
-                            "Top buttons:\n" +
-                            "Help opens this guide. Export copies a selected level as JSON. Scores shows every recorded completion for each level, including mode and score. Import reads level JSON from your clipboard. Multiplayer opens an invite menu for online friends, sends the selected level to the local websocket server, and shows queued Invite Pending buttons for incoming games.\n\n" +
-                            "Current Game card:\n" +
-                            "Mode shows whether you are idle, choosing tiles, editing, counting down, running, or finished. Group is the active level. Ticks is elapsed game ticks in the current run. Missed counts ticks without a new target tile. Revisits counts doubled-back tiles. Grade previews the current run grade once a run has started. Levels is your saved level count. The restart button reruns the active level; stop clears the current run or selection.\n\n" +
-                            "Levels card:\n" +
-                            "+ starts a new level selection. While choosing or editing, left-click tiles to add/remove them, then press save to name or update the level. Hold Ctrl while left-clicking to walk to a tile instead of marking it. Each level row has view/hide, play, edit, and delete buttons. The Sequence Mode checkbox marks 4 valid tiles using 2/4/6/8-step walk-distance bands — closer tiles get shorter timers, then color one to reveal 4 new options. In sequenced hardmode, shared next tiles are chosen from tiles that are still unmarked for every player; if no shared tiles remain, each client falls back to its own local unmarked tiles. A pink BONUS tile can still briefly appear on an unmarked tile within 4 tiles of the player; step on it to color extra tiles and advance the sequence. Directional Tiles can spawn green direction labels on unmarked tiles; step onto them from the marked side to clear them. Danger Tiles can spawn yellow countdown tiles in batches of 3 within 10 tiles of the player, while leaving at least 4 safe tiles; when one reaches 0 and is stepped on, it uncolors a random colored tile. View paints every tile in that level black so you can inspect the route before running it."
-            );
+            JTextArea text = new JTextArea(HELP_TEXT);
             text.setEditable(false);
             text.setLineWrap(true);
             text.setWrapStyleWord(true);
@@ -3892,7 +3987,7 @@ public class TileGamePlugin extends Plugin
         state.sequenceShrinkDelay = sequenceShrinkDelay;
         state.sequenceShrinkDelaySetTick = sequenceShrinkDelaySetTick;
         state.activeLevelTiles = toMultiplayerTiles(activeLevelGroupTiles);
-        state.runColoredTiles = toMultiplayerTiles(getAllColoredTiles());
+        state.runColoredTiles = toMultiplayerTiles(runColoredTiles.keySet());
         state.position = toMultiplayerTile(getCurrentPlayerTile());
         state.validSequenceTiles = toMultiplayerTiles(validSequenceTiles);
         state.sequenceTileTimers = toTimedTiles(sequenceTileTimers);

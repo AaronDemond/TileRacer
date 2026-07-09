@@ -90,26 +90,12 @@ class TileGamePanel extends PluginPanel
         addFullWidth(content, card(
                 "Game State",
                 currentGamePanel(),
-                "Current Game explains what the plugin is tracking right now.\n\n" +
-                        "Mode shows what Tile Game is currently doing: IDLE means nothing is active, CHOOSE means left-clicked tiles are being picked for a new group, EDIT means an existing group is being changed, COUNTDOWN means a run is about to start, LEVEL means a timed run is active, and DONE means your last run finished.\n\n" +
-                        "Level shows the level/group currently being edited, played, imported, exported, or most recently saved. After a multiplayer match, it shows the level that was just played.\n\n" +
-                        "Winner shows the username that won the last multiplayer match.\n\n" +
-                        "Time shows the last run time, or the winner's time after a multiplayer match. One RuneScape tick is about 0.6 seconds."
+                null
         ), 2);
         addFullWidth(content, card(
                 "Levels",
                 levelsCardPanel(),
-                "Levels lists every saved tile route. This card updates automatically when you create, edit, import, or delete a level.\n\n" +
-                        "The bright name on the left is the level name. The buttons on the right let you act immediately: view shows or hides that level's tiles in black, play starts the countdown, edit lets left-clicks add or remove tiles, and delete removes the level and its saved scores.\n\n" +
-                        "The Sequence Mode checkbox marks 4 valid tiles using 2/4/6/8-step walk-distance bands — closer tiles get shorter timers, then color one to reveal 4 new options.\n\n" +
-
-                        "In sequenced hardmode, valid next tiles are chosen from tiles that are still unmarked for every player. If no shared tiles remain, each client falls back to its own local unmarked tiles. A pink BONUS tile can still briefly appear on an unmarked tile within 4 tiles of the player; stepping on it colors extra tiles and advances the sequence.\n\n" +
-
-                        "Directional Tiles adds green direction labels that force you to enter a tile from the marked side. They spawn on unmarked tiles, up to 2 can be active at once, and they stay active until stepped on correctly. Hard Mode forces Directional Tiles on and locks the checkbox.\n\n" +
-
-                        "Danger Tiles adds yellow countdown tiles that spawn in batches of 3 within 10 tiles of you, but only if at least 4 safe tiles remain, and never more than 9 can be active at once. When they reach 0, the tile turns bright yellow and can uncolor one of your already colored tiles. Hard Mode forces Danger Tiles on and locks the checkbox.\n\n" +
-
-                        "Create a level with the + button, left-click tiles, then press save. Imported levels appear here automatically."
+                null
         ), 3);
 
         add(content, BorderLayout.CENTER);
@@ -863,21 +849,25 @@ class TileGamePanel extends PluginPanel
             toggleButton.setFont(toggleButton.getFont().deriveFont(Font.BOLD, 13f));
             toggleButton.addActionListener(event -> toggle());
 
-            JButton helpButton = new JButton("?");
-            helpButton.setBackground(GOLD);
-            helpButton.setForeground(Color.BLACK);
-            helpButton.setFocusPainted(false);
-            helpButton.setFont(helpButton.getFont().deriveFont(Font.BOLD, 11f));
-            helpButton.addActionListener(event -> showCardHelp(title, helpText));
-
-            JPanel helpRow = new JPanel(new BorderLayout());
-            helpRow.setBackground(SECTION_BACKGROUND);
-            helpRow.add(helpButton, BorderLayout.EAST);
-
             body = new JPanel(new BorderLayout(0, 6));
             body.setBackground(SECTION_BACKGROUND);
             body.add(component, BorderLayout.CENTER);
-            body.add(helpRow, BorderLayout.SOUTH);
+
+            // Only show a help button when help text is provided
+            if (helpText != null && !helpText.trim().isEmpty())
+            {
+                JButton helpButton = new JButton("?");
+                helpButton.setBackground(GOLD);
+                helpButton.setForeground(Color.BLACK);
+                helpButton.setFocusPainted(false);
+                helpButton.setFont(helpButton.getFont().deriveFont(Font.BOLD, 11f));
+                helpButton.addActionListener(event -> showCardHelp(title, helpText));
+
+                JPanel helpRow = new JPanel(new BorderLayout());
+                helpRow.setBackground(SECTION_BACKGROUND);
+                helpRow.add(helpButton, BorderLayout.EAST);
+                body.add(helpRow, BorderLayout.SOUTH);
+            }
 
             add(toggleButton, BorderLayout.NORTH);
             add(body, BorderLayout.CENTER);
