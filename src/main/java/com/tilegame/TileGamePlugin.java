@@ -143,6 +143,7 @@ public class TileGamePlugin extends Plugin
     private final Map<WorldPoint, Integer> disabledTileTimers = new HashMap<>();
     private WorldPoint resetDisabledTile = null;
     private WorldPoint resetTile = null;
+    private WorldPoint lastDisablerClearRequestTile = null;
     private final Set<WorldPoint> usedBonusTiles = new HashSet<>();
     private TileModifier activeModifierTool = null;
 
@@ -756,6 +757,9 @@ public class TileGamePlugin extends Plugin
             case "state":
                 clientThread.invokeLater(() -> handleMultiplayerState(message));
                 break;
+            case "clear_disablers":
+                clientThread.invokeLater(() -> handleMultiplayerClearDisablers(message));
+                break;
             case "game_over":
                 clientThread.invokeLater(() -> handleMultiplayerGameOver(message));
                 break;
@@ -871,6 +875,25 @@ public class TileGamePlugin extends Plugin
         }
 
         applyMultiplayerState(message.state);
+        updatePanel();
+    }
+
+    private void handleMultiplayerClearDisablers(TileGameMultiplayerMessage message)
+    {
+        // Host-side: a participant stepped on the clear (blue) tile — clear disablers for everyone
+        if (!multiplayerHost || !multiplayerActive || !multiplayerRoomId.equals(message.roomId))
+        {
+            return;
+        }
+
+        WorldPoint clearedTile = fromMultiplayerTile(message.tile);
+        if (clearedTile == null || resetTile == null || !resetTile.equals(clearedTile) || disabledTileTimers.isEmpty())
+        {
+            return;
+        }
+
+        clearDisablersFromReset(clearedTile);
+        broadcastMultiplayerStateIfHost();
         updatePanel();
     }
 
@@ -2584,29 +2607,7 @@ public class TileGamePlugin extends Plugin
                                     if (resetTile != null && resetTile.equals(currentTile))
                                     {
                                         // Player stepped on clear tile — temporarily clear disablers and start countdown
-                                        disabledTileTimers.clear();
-                                        resetTile = null;
-                                        sequenceShrinkDelay = 1;
-
-                                        // Calculate ticks to reach closest valid tile from here
-                                        int minDist = Integer.MAX_VALUE;
-                                        for (WorldPoint tile : validSequenceTiles)
-                                        {
-                                            if (!runColoredTiles.containsKey(tile))
-                                            {
-                                                int dist = Math.abs(tile.getX() - currentTile.getX()) + Math.abs(tile.getY() - currentTile.getY());
-                                                if (dist < minDist)
-                                                {
-                                                    minDist = dist;
-                                                }
-                                            }
-                                        }
-
-                                        if (minDist == Integer.MAX_VALUE)
-                                        {
-                                            minDist = 1;
-                                        }
-                                        disablerCountdown = minDist + 1;
+                                        clearDisablersFromReset(currentTile);
                                         return;
                                     }
 
@@ -2671,9 +2672,7 @@ public class TileGamePlugin extends Plugin
                                 // Check if player stepped on the clear tile
                                 if (!disabledTileTimers.isEmpty() && resetTile != null && resetTile.equals(currentTile))
                                 {
-                                    disabledTileTimers.clear();
-                                    resetTile = null;
-                                    nonSeqDisablerTimer = 3;
+                                    clearDisablersFromReset(currentTile);
                                     return;
                                 }
                                 else if (!disabledTileTimers.isEmpty() && resetTile == null)
@@ -2790,6 +2789,66 @@ public class TileGamePlugin extends Plugin
             }
         }
 
+    // Clears active disablers as if the reset (blue) tile at fromTile was stepped on,
+    // applying the mode-appropriate follow-up timers.
+    private void clearDisablersFromReset(WorldPoint fromTile)
+    {
+        disabledTileTimers.clear();
+        resetDisabledTile = null;
+        resetTile = null;
+
+        if (!isHardMode)
+        {
+            return;
+        }
+
+        if (isSequenceModeEnabled())
+        {
+            sequenceShrinkDelay = 1;
+
+            // Calculate ticks to reach closest valid tile from the reset tile
+            int minDist = Integer.MAX_VALUE;
+            for (WorldPoint tile : validSequenceTiles)
+            {
+                if (!runColoredTiles.containsKey(tile))
+                {
+                    int dist = Math.abs(tile.getX() - fromTile.getX()) + Math.abs(tile.getY() - fromTile.getY());
+                    if (dist < minDist)
+                    {
+                        minDist = dist;
+                    }
+                }
+            }
+
+            if (minDist == Integer.MAX_VALUE)
+            {
+                minDist = 1;
+            }
+            disablerCountdown = minDist + 1;
+        }
+        else
+        {
+            nonSeqDisablerTimer = 3;
+        }
+    }
+
+    // Participant-side: ask the host to clear the disablers after stepping on the reset tile
+    private void requestMultiplayerDisablerClear(WorldPoint tile)
+    {
+        if (disabledTileTimers.isEmpty() || tile.equals(lastDisablerClearRequestTile))
+        {
+            return;
+        }
+
+        lastDisablerClearRequestTile = tile;
+        TileGameMultiplayerMessage message = new TileGameMultiplayerMessage();
+        message.type = "clear_disablers";
+        message.roomId = multiplayerRoomId;
+        message.player = currentPlayerName();
+        message.tile = toMultiplayerTile(tile);
+        sendMultiplayerMessage(message);
+    }
+
     void processGameTick()
     {
         if (mode != TileGameMode.LEVEL)
@@ -2840,11 +2899,19 @@ public class TileGamePlugin extends Plugin
 
         // If the player stepped on the reset tile, re-enable all currently-disabled tiles
                 // (In hard mode this is handled by processDisableTick for the countdown mechanic)
-                if (resetTile != null && resetTile.equals(currentTile) && !isHardMode)
+                if (resetTile != null && resetTile.equals(currentTile))
                 {
-                    disabledTileTimers.clear();
-                    resetDisabledTile = null;
-                    resetTile = null;
+                    if (multiplayerParticipant)
+                    {
+                        // Participants ask the host to clear disablers for everyone
+                        requestMultiplayerDisablerClear(currentTile);
+                    }
+                    else if (!isHardMode)
+                    {
+                        disabledTileTimers.clear();
+                        resetDisabledTile = null;
+                        resetTile = null;
+                    }
                 }
 
         if (!tileAlreadyColored && !tileDisabled && !directionalTileActive)
@@ -3105,6 +3172,7 @@ public class TileGamePlugin extends Plugin
         disabledTileTimers.clear();
         resetDisabledTile = null;
         resetTile = null;
+        lastDisablerClearRequestTile = null;
         usedBonusTiles.clear();
         dangerTileCountdowns.clear();
         dangerTileActiveTimers.clear();
@@ -3482,6 +3550,11 @@ public class TileGamePlugin extends Plugin
         replaceTimedMap(disabledTileTimers, state.disabledTileTimers);
         resetTile = fromMultiplayerTile(state.resetTile);
         resetDisabledTile = null;
+        if (resetTile == null || !resetTile.equals(lastDisablerClearRequestTile))
+        {
+            // A new (or no) reset tile is active — allow a fresh clear request
+            lastDisablerClearRequestTile = null;
+        }
         replaceTimedMap(dangerTileCountdowns, state.dangerTileCountdowns);
         replaceTimedMap(dangerTileActiveTimers, state.dangerTileActiveTimers);
         replaceDirectionalMap(directionalTileDirections, state.directionalTiles);

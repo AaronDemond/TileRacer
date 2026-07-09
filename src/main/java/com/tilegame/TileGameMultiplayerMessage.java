@@ -17,6 +17,7 @@ final class TileGameMultiplayerMessage
     List<String> deliveredPlayers;
     List<String> queuedPlayers;
     List<String> players;
+    TileGameMultiplayerTile tile;
     TileGameMultiplayerLevel level;
     TileGameMultiplayerState state;
 }

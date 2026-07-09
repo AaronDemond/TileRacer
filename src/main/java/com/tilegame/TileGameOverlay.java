@@ -18,6 +18,7 @@ import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.NPC;
 import net.runelite.api.Perspective;
+import net.runelite.api.Player;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
@@ -49,7 +50,7 @@ public class TileGameOverlay extends Overlay
     @Override
     public Dimension render(Graphics2D graphics)
     {
-        List<Area> npcMasks = buildNpcMasks();
+        List<Area> npcMasks = buildActorMasks();
 
         for (WorldPoint worldPoint : plugin.getViewedLevelTiles())
         {
@@ -225,13 +226,13 @@ public class TileGameOverlay extends Overlay
         return null;
     }
 
-    private List<Area> buildNpcMasks()
+    private List<Area> buildActorMasks()
     {
-        List<Area> npcMasks = new ArrayList<>();
+        List<Area> actorMasks = new ArrayList<>();
         WorldView worldView = client.getTopLevelWorldView();
         if (worldView == null)
         {
-            return npcMasks;
+            return actorMasks;
         }
 
         for (NPC npc : worldView.npcs())
@@ -245,11 +246,29 @@ public class TileGameOverlay extends Overlay
 
             if (hull != null)
             {
-                npcMasks.add(new Area(hull));
+                actorMasks.add(new Area(hull));
             }
         }
 
-        return npcMasks;
+        // The local player is rendered pixel-perfect above the tiles by the
+        // ABOVE_SCENE render pipeline, so only mask other players' hulls.
+        Player localPlayer = client.getLocalPlayer();
+        for (Player player : worldView.players())
+        {
+            if (player == null || player == localPlayer)
+            {
+                continue;
+            }
+
+            Shape hull = player.getConvexHull();
+
+            if (hull != null)
+            {
+                actorMasks.add(new Area(hull));
+            }
+        }
+
+        return actorMasks;
     }
 
     private void drawTile(Graphics2D graphics, List<Area> npcMasks, WorldPoint worldPoint, Color color)
