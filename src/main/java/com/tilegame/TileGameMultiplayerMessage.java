@@ -13,6 +13,7 @@ final class TileGameMultiplayerMessage
     String reason;
     String error;
     int totalTicks;
+    int sequenceNumber;
     List<String> invitedPlayers;
     List<String> deliveredPlayers;
     List<String> queuedPlayers;
@@ -39,6 +40,7 @@ final class TileGameMultiplayerState
 {
     String mode;
     boolean sequenceModeEnabled;
+    boolean sequenceSharedModeEnabled;
     boolean addDisablersEnabled;
     boolean dangerTilesEnabled;
     boolean directionalTilesEnabled;
@@ -46,10 +48,10 @@ final class TileGameMultiplayerState
     int countdownTicksRemaining;
     int totalRunTicks;
     int currentSequenceNumber;
-    int disablerCountdown;
     int sequenceShrinkDelay;
-    int nonSeqDisablerTimer;
     List<TileGameMultiplayerTile> activeLevelTiles;
+    List<TileGameMultiplayerTile> runColoredTiles;
+    TileGameMultiplayerTile position;
     List<TileGameMultiplayerTile> validSequenceTiles;
     List<TileGameMultiplayerTimedTile> sequenceTileTimers;
     List<TileGameMultiplayerTimedTile> sequenceHardBonusTiles;

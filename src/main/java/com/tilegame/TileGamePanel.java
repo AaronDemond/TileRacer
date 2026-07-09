@@ -99,7 +99,7 @@ class TileGamePanel extends PluginPanel
                         "The bright name on the left is the level name. The buttons on the right let you act immediately: view shows or hides that level's tiles in black, play starts the countdown, edit lets left-clicks add or remove tiles, and delete removes the level and its saved scores.\n\n" +
                         "The Sequence Mode checkbox marks 4 valid tiles using 2/4/6/8-step walk-distance bands — closer tiles get shorter timers, then color one to reveal 4 new options.\n\n" +
 
-                        "In sequenced hardmode, a pink BONUS tile can briefly appear on an unmarked tile within 4 tiles of the player; stepping on it colors extra tiles and advances the sequence.\n\n" +
+                        "In sequenced hardmode, valid next tiles are chosen from tiles that are still unmarked for every player. If no shared tiles remain, each client falls back to its own local unmarked tiles. A pink BONUS tile can still briefly appear on an unmarked tile within 4 tiles of the player; stepping on it colors extra tiles and advances the sequence.\n\n" +
 
                         "Directional Tiles adds green direction labels that force you to enter a tile from the marked side. They spawn on unmarked tiles, up to 2 can be active at once, and they stay active until stepped on correctly. Hard Mode forces Directional Tiles on and locks the checkbox.\n\n" +
 
@@ -313,7 +313,7 @@ class TileGamePanel extends PluginPanel
         sequenceCheckbox.setBackground(SECTION_BACKGROUND);
         sequenceCheckbox.setFont(sequenceCheckbox.getFont().deriveFont(Font.PLAIN, 11f));
         sequenceCheckbox.setFocusPainted(false);
-        sequenceCheckbox.setToolTipText("When enabled, 4 valid tiles are chosen from 2/4/6/8-step walk-distance bands. Color a tile to get 4 new options. Must color all tiles to complete the level.");
+        sequenceCheckbox.setToolTipText("When enabled, 4 valid tiles are chosen from 2/4/6/8-step walk-distance bands. In multiplayer, shared unmarked tiles are preferred first, then each client falls back to local unmarked tiles. Color a tile to get 4 new options. Must color all tiles to complete the level.");
         sequenceCheckbox.setEnabled(plugin.canEditSequenceMode());
         sequenceCheckbox.addActionListener(event -> plugin.setSequenceModeEnabled(sequenceCheckbox.isSelected()));
 

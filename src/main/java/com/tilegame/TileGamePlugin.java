@@ -98,6 +98,8 @@ public class TileGamePlugin extends Plugin
     private static final int DIRECTIONAL_TILE_MAX_ACTIVE = 2;
     private static final int DANGER_TILE_COUNTDOWN_TICKS = 2;
     private static final int DANGER_TILE_ACTIVE_TICKS = 5;
+    private static final double DISABLER_SPAWN_CHANCE = 0.10;
+    private static final int RECENT_SEQUENCE_BATCH_LIMIT = 4;
     private static final URI MULTIPLAYER_SERVER_URI = URI.create("ws://159.203.9.18:8765");
 
     @Inject
@@ -150,6 +152,8 @@ public class TileGamePlugin extends Plugin
     private final Set<WorldPoint> sequenceOrder = new HashSet<>();
     private int currentSequenceNumber = 0;
     private final Set<WorldPoint> validSequenceTiles = new HashSet<>();
+    private final Map<Integer, Set<WorldPoint>> recentSequenceBatches = new LinkedHashMap<>();
+    private final Set<String> acceptedSequenceClaims = new HashSet<>();
     private final Map<WorldPoint, Integer> sequenceHardBonusTiles = new HashMap<>();
     private final Map<WorldPoint, Integer> sequenceHardBonusTimers = new HashMap<>();
 
@@ -174,9 +178,8 @@ public class TileGamePlugin extends Plugin
         private boolean isAddDisablersMode = false;
         private boolean isDangerTilesMode = false;
         private boolean isDirectionalTilesMode = false;
-        private int disablerCountdown = 0;
         private int sequenceShrinkDelay = 0;
-        private int nonSeqDisablerTimer = 3;
+        private int sequenceShrinkDelaySetTick = -1;
         private final LinkedHashMap<WorldPoint, Integer> sequenceTileTimers = new LinkedHashMap<>();
         private final Map<WorldPoint, Integer> powerUpTiles = new HashMap<>();
         private final Map<WorldPoint, Integer> powerUpTimers = new HashMap<>();
@@ -203,10 +206,13 @@ public class TileGamePlugin extends Plugin
     private volatile String multiplayerSummaryWinner = "";
     private volatile String multiplayerSummaryWinnerTimeLabel = "";
     private boolean multiplayerSequenceMode = false;
+    private boolean multiplayerSequenceSharedMode = true;
     private boolean multiplayerAddDisablers = false;
     private boolean multiplayerDangerTiles = false;
     private boolean multiplayerDirectionalTiles = false;
     private boolean multiplayerHardMode = false;
+    private final Map<String, Set<WorldPoint>> multiplayerParticipantColoredTiles = new HashMap<>();
+    private final Map<String, WorldPoint> multiplayerParticipantPositions = new HashMap<>();
     private int lastMultiplayerRegisterAttemptTick = -1000;
 
     @Provides
@@ -384,13 +390,36 @@ public class TileGamePlugin extends Plugin
 
         hideViewedGroups();
         String groupName = normalizeGroupName(levelExport.name);
-        groups.put(groupName, toWorldPoints(levelExport.tiles));
-        highscores.remove(groupName);
         activeGroupName = groupName;
+        boolean matchesExistingLevel = isMatchingImportedLevel(groupName, levelExport.tiles);
+
+        if (!matchesExistingLevel && groups.containsKey(groupName))
+        {
+            int overwrite = JOptionPane.showConfirmDialog(
+                    null,
+                    "A level named '" + groupName + "' already exists and is different. Overwrite it?",
+                    "Overwrite Tile Game Level?",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE
+            );
+            if (overwrite != JOptionPane.YES_OPTION)
+            {
+                return;
+            }
+        }
+
+        if (!matchesExistingLevel)
+        {
+            groups.put(groupName, toWorldPoints(levelExport.tiles));
+            highscores.remove(groupName);
+        }
+
         savePersistentData();
         updatePanel();
         updatePanelLists();
-        showOverhead("Imported " + groupName + " from " + safeCreator(levelExport.creator) + ".");
+        showOverhead(matchesExistingLevel
+                ? "Kept existing level " + groupName + "."
+                : "Imported " + groupName + " from " + safeCreator(levelExport.creator) + ".");
     }
 
     void editGroup(String rawGroupName)
@@ -654,6 +683,9 @@ public class TileGamePlugin extends Plugin
         clearMultiplayerSummary();
         setMultiplayerModifierSnapshot(pendingSequenceMode, pendingAddDisablers, pendingDangerTiles, pendingDirectionalTiles, pendingHardMode);
         multiplayerPlayers.clear();
+        multiplayerParticipantColoredTiles.clear();
+        multiplayerParticipantPositions.clear();
+        multiplayerSequenceSharedMode = true;
         multiplayerPlayers.add(currentPlayerName());
 
         TileGameMultiplayerMessage message = new TileGameMultiplayerMessage();
@@ -683,6 +715,8 @@ public class TileGamePlugin extends Plugin
         multiplayerActive = false;
         clearMultiplayerSummary();
         setMultiplayerModifierSnapshot(invite.level);
+        multiplayerParticipantColoredTiles.clear();
+        multiplayerSequenceSharedMode = true;
         multiplayerPlayers.clear();
         if (invite.host != null)
         {
@@ -730,6 +764,21 @@ public class TileGamePlugin extends Plugin
         multiplayerClient.send(currentPlayerName(), message);
     }
 
+    private void sendMultiplayerParticipantStateIfNeeded()
+    {
+        if (!isMultiplayerParticipant() || multiplayerRoomId.isEmpty())
+        {
+            return;
+        }
+
+        TileGameMultiplayerMessage message = new TileGameMultiplayerMessage();
+        message.type = "participant_state";
+        message.roomId = multiplayerRoomId;
+        message.player = currentPlayerName();
+        message.state = createMultiplayerStateSnapshot();
+        sendMultiplayerMessage(message);
+    }
+
     private void handleMultiplayerMessage(TileGameMultiplayerMessage message)
     {
         if (message == null || message.type == null)
@@ -757,8 +806,17 @@ public class TileGamePlugin extends Plugin
             case "state":
                 clientThread.invokeLater(() -> handleMultiplayerState(message));
                 break;
+            case "participant_state":
+                clientThread.invokeLater(() -> handleMultiplayerParticipantState(message));
+                break;
+            case "sequence_claim":
+                clientThread.invokeLater(() -> handleMultiplayerSequenceClaim(message));
+                break;
             case "clear_disablers":
                 clientThread.invokeLater(() -> handleMultiplayerClearDisablers(message));
+                break;
+            case "clear_directional":
+                clientThread.invokeLater(() -> handleMultiplayerClearDirectional(message));
                 break;
             case "game_over":
                 clientThread.invokeLater(() -> handleMultiplayerGameOver(message));
@@ -843,6 +901,12 @@ public class TileGamePlugin extends Plugin
             multiplayerPlayers.remove(message.player);
         }
 
+        if (message.player != null)
+        {
+            multiplayerParticipantColoredTiles.remove(message.player);
+            multiplayerParticipantPositions.remove(message.player);
+        }
+
         updatePanel();
         if (message.player != null)
         {
@@ -878,6 +942,131 @@ public class TileGamePlugin extends Plugin
         updatePanel();
     }
 
+    private void handleMultiplayerParticipantState(TileGameMultiplayerMessage message)
+    {
+        if (!multiplayerHost || !multiplayerActive || !multiplayerRoomId.equals(message.roomId) || message.state == null)
+        {
+            return;
+        }
+
+        if (message.player == null || message.player.trim().isEmpty() || currentPlayerName().equals(message.player))
+        {
+            return;
+        }
+
+        Set<WorldPoint> incomingColoredTiles = fromMultiplayerTiles(message.state.runColoredTiles);
+        multiplayerParticipantColoredTiles.put(message.player, incomingColoredTiles);
+        multiplayerParticipantPositions.put(message.player, fromMultiplayerTile(message.state.position));
+
+        for (WorldPoint tile : incomingColoredTiles)
+        {
+            if (!runColoredTiles.containsKey(tile))
+            {
+                runColoredTiles.put(tile, randomColor());
+            }
+        }
+    }
+
+    private void handleMultiplayerSequenceClaim(TileGameMultiplayerMessage message)
+    {
+        if (!multiplayerHost || !multiplayerActive || !multiplayerRoomId.equals(message.roomId) || !isSequenceMode)
+        {
+            return;
+        }
+
+        if (message.player == null || message.player.trim().isEmpty() || currentPlayerName().equals(message.player))
+        {
+            return;
+        }
+
+        WorldPoint claimedTile = fromMultiplayerTile(message.tile);
+        if (claimedTile == null || !isAcceptedSequenceClaim(message.sequenceNumber, claimedTile))
+        {
+            return;
+        }
+
+        String claimKey = sequenceClaimKey(message.player, message.sequenceNumber, claimedTile);
+        if (!acceptedSequenceClaims.add(claimKey))
+        {
+            return;
+        }
+
+        multiplayerParticipantColoredTiles
+                .computeIfAbsent(message.player, ignored -> new HashSet<>())
+                .add(claimedTile);
+        multiplayerParticipantPositions.put(message.player, claimedTile);
+        if (!runColoredTiles.containsKey(claimedTile))
+        {
+            runColoredTiles.put(claimedTile, randomColor());
+        }
+
+        if (message.sequenceNumber == currentSequenceNumber)
+        {
+            selectNextValidTiles();
+        }
+
+        broadcastMultiplayerStateIfHost();
+        updatePanel();
+    }
+
+    private boolean isAcceptedSequenceClaim(int sequenceNumber, WorldPoint claimedTile)
+    {
+        Set<WorldPoint> sequenceBatch = recentSequenceBatches.get(sequenceNumber);
+        return sequenceBatch != null && sequenceBatch.contains(claimedTile);
+    }
+
+    private String sequenceClaimKey(String player, int sequenceNumber, WorldPoint tile)
+    {
+        return sequenceNumber + "|"
+                + normalizeName(player) + "|"
+                + tile.getX() + ","
+                + tile.getY() + ","
+                + tile.getPlane();
+    }
+
+    private void rememberSequenceBatch()
+    {
+        if (!isSequenceMode)
+        {
+            return;
+        }
+
+        recentSequenceBatches.put(currentSequenceNumber, new HashSet<>(validSequenceTiles));
+        while (recentSequenceBatches.size() > RECENT_SEQUENCE_BATCH_LIMIT)
+        {
+            Integer removedSequenceNumber = recentSequenceBatches.keySet().iterator().next();
+            recentSequenceBatches.remove(removedSequenceNumber);
+            String removedPrefix = removedSequenceNumber + "|";
+            acceptedSequenceClaims.removeIf(claim -> claim.startsWith(removedPrefix));
+        }
+    }
+
+    private String normalizeName(String raw)
+    {
+        if (raw == null)
+        {
+            return "";
+        }
+
+        return raw.replace('\u00a0', ' ').replace('_', ' ').trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
+    }
+
+    private void pruneLocallyColoredSequenceTiles()
+    {
+        if (runColoredTiles.isEmpty() || validSequenceTiles.isEmpty())
+        {
+            return;
+        }
+
+        for (WorldPoint tile : new ArrayList<>(runColoredTiles.keySet()))
+        {
+            if (validSequenceTiles.remove(tile))
+            {
+                sequenceTileTimers.remove(tile);
+            }
+        }
+    }
+
     private void handleMultiplayerClearDisablers(TileGameMultiplayerMessage message)
     {
         // Host-side: a participant stepped on the clear (blue) tile — clear disablers for everyone
@@ -893,6 +1082,25 @@ public class TileGamePlugin extends Plugin
         }
 
         clearDisablersFromReset(clearedTile);
+        broadcastMultiplayerStateIfHost();
+        updatePanel();
+    }
+
+    private void handleMultiplayerClearDirectional(TileGameMultiplayerMessage message)
+    {
+        // Host-side: a participant correctly entered a directional tile — remove it from the host's authoritative state
+        if (!multiplayerHost || !multiplayerActive || !multiplayerRoomId.equals(message.roomId))
+        {
+            return;
+        }
+
+        WorldPoint clearedTile = fromMultiplayerTile(message.tile);
+        if (clearedTile == null || !directionalTileDirections.containsKey(clearedTile))
+        {
+            return;
+        }
+
+        directionalTileDirections.remove(clearedTile);
         broadcastMultiplayerStateIfHost();
         updatePanel();
     }
@@ -917,6 +1125,8 @@ public class TileGamePlugin extends Plugin
         multiplayerHost = false;
         clearMultiplayerModifierSnapshot();
         multiplayerPlayers.clear();
+        multiplayerParticipantColoredTiles.clear();
+        multiplayerSequenceSharedMode = true;
         updatePanel();
         String reason = message.reason == null || message.reason.trim().isEmpty() ? "" : " " + message.reason;
         showOverhead("Multiplayer game over! Winner: " + safeCreator(message.winner) + "." + reason);
@@ -941,6 +1151,8 @@ public class TileGamePlugin extends Plugin
         multiplayerHost = false;
         clearMultiplayerModifierSnapshot();
         multiplayerPlayers.clear();
+        multiplayerParticipantColoredTiles.clear();
+        multiplayerSequenceSharedMode = true;
         updatePanel();
         showOverhead("Tile Game lobby closed.");
     }
@@ -968,6 +1180,8 @@ public class TileGamePlugin extends Plugin
         multiplayerActive = false;
         clearMultiplayerModifierSnapshot();
         multiplayerPlayers.clear();
+        multiplayerParticipantColoredTiles.clear();
+        multiplayerSequenceSharedMode = true;
         updatePanel();
     }
 
@@ -1142,6 +1356,7 @@ public class TileGamePlugin extends Plugin
                   isDirectionalTilesMode = directionalTilesEnabled;
 
            generateSequenceOrder(tilesForRun, sequenceEnabled);
+           sendMultiplayerParticipantStateIfNeeded();
 
            countdownTicksRemaining = COUNTDOWN_START_TICKS;
            mode = TileGameMode.COUNTDOWN;
@@ -1170,10 +1385,20 @@ public class TileGamePlugin extends Plugin
         validSequenceTiles.clear();
         sequenceTileTimers.clear();
 
-        List<WorldPoint> candidates = new ArrayList<>(sequenceOrder);
-        candidates.removeAll(runColoredTiles.keySet());
-        candidates.removeIf(this::isDangerTileOccupied);
-        candidates.removeIf(this::isDirectionalTileOccupied);
+        boolean multiplayerSharedSequence = multiplayerHost && multiplayerActive && !multiplayerRoomId.isEmpty();
+        Set<WorldPoint> blockedTiles = multiplayerSharedSequence ? getMultiplayerSequenceBlockedTiles() : new HashSet<>(runColoredTiles.keySet());
+        List<WorldPoint> candidates = buildSequenceCandidates(blockedTiles);
+
+        if (multiplayerSharedSequence && candidates.isEmpty())
+        {
+            multiplayerSequenceSharedMode = false;
+            blockedTiles = new HashSet<>(runColoredTiles.keySet());
+            candidates = buildSequenceCandidates(blockedTiles);
+        }
+        else
+        {
+            multiplayerSequenceSharedMode = multiplayerSharedSequence;
+        }
 
         WorldPoint currentTile = getCurrentPlayerTile();
         WorldView worldView = client.getTopLevelWorldView();
@@ -1233,10 +1458,7 @@ public class TileGamePlugin extends Plugin
 
         if (orderedSelections.size() < 4)
         {
-            List<WorldPoint> topUpCandidates = new ArrayList<>(sequenceOrder);
-            topUpCandidates.removeAll(runColoredTiles.keySet());
-            topUpCandidates.removeIf(this::isDangerTileOccupied);
-            topUpCandidates.removeIf(this::isDirectionalTileOccupied);
+            List<WorldPoint> topUpCandidates = buildSequenceCandidates(blockedTiles);
             topUpCandidates.removeAll(orderedSelections);
 
             while (orderedSelections.size() < 4 && !topUpCandidates.isEmpty())
@@ -1254,6 +1476,37 @@ public class TileGamePlugin extends Plugin
         }
 
         sequenceShrinkDelay = 1;
+        syncSequenceBlockersToCurrentBatch();
+        rememberSequenceBatch();
+    }
+
+    private void syncSequenceBlockersToCurrentBatch()
+    {
+        if (!isAddDisablersEnabled() || disabledTileTimers.isEmpty() || !isSequenceModeEnabled())
+        {
+            return;
+        }
+
+        for (WorldPoint tile : validSequenceTiles)
+        {
+            if (!runColoredTiles.containsKey(tile) && !disabledTileTimers.containsKey(tile))
+            {
+                disabledTileTimers.put(tile, 1);
+            }
+        }
+
+        if (!disabledTileTimers.isEmpty() && resetTile == null)
+        {
+            WorldPoint currentTile = getCurrentPlayerTile();
+            if (currentTile != null)
+            {
+                WorldPoint resetPoint = findWalkableResetCandidate(currentTile, 4);
+                if (resetPoint != null)
+                {
+                    resetTile = resetPoint;
+                }
+            }
+        }
     }
 
     private void selectRandomSequenceTiles(List<WorldPoint> candidates)
@@ -1268,6 +1521,35 @@ public class TileGamePlugin extends Plugin
             validSequenceTiles.add(tile);
             sequenceTileTimers.put(tile, i + 1);
         }
+
+        syncSequenceBlockersToCurrentBatch();
+
+        rememberSequenceBatch();
+    }
+
+    private Set<WorldPoint> getMultiplayerSequenceBlockedTiles()
+    {
+        Set<WorldPoint> blockedTiles = new HashSet<>(runColoredTiles.keySet());
+        for (Set<WorldPoint> participantTiles : multiplayerParticipantColoredTiles.values())
+        {
+            if (participantTiles != null)
+            {
+                blockedTiles.addAll(participantTiles);
+            }
+        }
+        return blockedTiles;
+    }
+
+    private List<WorldPoint> buildSequenceCandidates(Set<WorldPoint> blockedTiles)
+    {
+        List<WorldPoint> candidates = new ArrayList<>(sequenceOrder);
+        if (blockedTiles != null)
+        {
+            candidates.removeAll(blockedTiles);
+        }
+        candidates.removeIf(this::isDangerTileOccupied);
+        candidates.removeIf(this::isDirectionalTileOccupied);
+        return candidates;
     }
 
     private void processSequenceHardBonusTimers()
@@ -1360,15 +1642,12 @@ public class TileGamePlugin extends Plugin
 
         runColoredTiles.put(tile, randomColor());
         playPaintSound();
-
-        if (isHardMode)
-        {
-            disablerCountdown = 0;
-        }
+        sendMultiplayerSequenceClaimIfNeeded(tile);
+        sendMultiplayerParticipantStateIfNeeded();
 
         if (isSequenceModeEnabled())
         {
-            if (isMultiplayerParticipant())
+            if (isMultiplayerParticipant() && multiplayerSequenceSharedMode)
             {
                 validSequenceTiles.remove(tile);
                 sequenceTileTimers.remove(tile);
@@ -1511,6 +1790,7 @@ public class TileGamePlugin extends Plugin
                     {
                         runColoredTiles.put(currentTile, randomColor());
                         playPaintSound();
+                        sendMultiplayerParticipantStateIfNeeded();
                     }
                 }
             }
@@ -1533,6 +1813,8 @@ public class TileGamePlugin extends Plugin
             String direction = directionalTileDirections.get(currentTile);
             if (isCorrectDirectionalEntry(currentTile, lastTrueTile, direction) && !runColoredTiles.containsKey(currentTile))
             {
+                directionalTileDirections.remove(currentTile);
+                requestMultiplayerDirectionalClear(currentTile);
                 if (!isSequenceModeEnabled() || validSequenceTiles.contains(currentTile))
                 {
                     claimSequenceTile(currentTile);
@@ -1541,6 +1823,7 @@ public class TileGamePlugin extends Plugin
                 {
                     runColoredTiles.put(currentTile, randomColor());
                     playPaintSound();
+                    sendMultiplayerParticipantStateIfNeeded();
                 }
             }
         }
@@ -1566,11 +1849,12 @@ public class TileGamePlugin extends Plugin
         }
 
         List<WorldPoint> candidates = new ArrayList<>();
+        Set<WorldPoint> allColoredTiles = getAllColoredTiles();
         Map<WorldPoint, TileModifier> mods = tileModifiers.get(normalizeGroupName(activeGroupName));
         for (WorldPoint tile : activeLevelGroupTiles)
         {
             if (tile.equals(currentTile)
-                    || runColoredTiles.containsKey(tile)
+                    || allColoredTiles.contains(tile)
                     || disabledTileTimers.containsKey(tile)
                     || dangerTileCountdowns.containsKey(tile)
                     || dangerTileActiveTimers.containsKey(tile)
@@ -1832,6 +2116,7 @@ public class TileGamePlugin extends Plugin
 
         WorldPoint tileToUncolor = coloredTiles.get(new java.util.Random().nextInt(coloredTiles.size()));
         runColoredTiles.remove(tileToUncolor);
+        sendMultiplayerParticipantStateIfNeeded();
     }
 
     void deleteGroup(String rawGroupName)
@@ -2056,10 +2341,6 @@ public class TileGamePlugin extends Plugin
         }
 
         mode = TileGameMode.LEVEL;
-                if (isHardMode && !isSequenceModeEnabled())
-                {
-                    nonSeqDisablerTimer = 3;
-                }
                 lastProcessedTick = client.getTickCount();
         updatePanel();
         showOverhead("GO!");
@@ -2154,34 +2435,134 @@ public class TileGamePlugin extends Plugin
         return tile != null && (dangerTileCountdowns.containsKey(tile) || dangerTileActiveTimers.containsKey(tile));
     }
 
-    private List<WorldPoint> getDangerSpawnCandidates(WorldPoint currentTile)
+    private Set<WorldPoint> getAllColoredTiles()
     {
-        List<WorldPoint> candidates = new ArrayList<>();
-        Map<WorldPoint, TileModifier> mods = tileModifiers.get(normalizeGroupName(activeGroupName));
-
-        for (WorldPoint tile : activeLevelGroupTiles)
+        Set<WorldPoint> allColored = new HashSet<>(runColoredTiles.keySet());
+        for (Set<WorldPoint> participantTiles : multiplayerParticipantColoredTiles.values())
         {
-            if (runColoredTiles.containsKey(tile)
-                    || disabledTileTimers.containsKey(tile)
-                    || dangerTileCountdowns.containsKey(tile)
-                    || dangerTileActiveTimers.containsKey(tile)
-                    || validSequenceTiles.contains(tile)
-                    || sequenceHardBonusTiles.containsKey(tile)
-                    || directionalTileDirections.containsKey(tile)
-                    || (resetTile != null && resetTile.equals(tile))
-                    || (mods != null && mods.containsKey(tile)))
+            if (participantTiles != null)
             {
-                continue;
+                allColored.addAll(participantTiles);
             }
+        }
+        return allColored;
+    }
 
-            int dist = Math.abs(tile.getX() - currentTile.getX()) + Math.abs(tile.getY() - currentTile.getY());
-            if (dist <= DANGER_TILE_SPAWN_RADIUS)
+    private Set<WorldPoint> getSceneTilesWithinDistance(WorldPoint center, int distance)
+    {
+        Set<WorldPoint> nearby = new HashSet<>();
+        if (center == null)
+        {
+            return nearby;
+        }
+
+        WorldView worldView = client.getTopLevelWorldView();
+        if (worldView == null)
+        {
+            return nearby;
+        }
+
+        Scene scene = worldView.getScene();
+        if (scene == null)
+        {
+            return nearby;
+        }
+
+        Tile[][][] tiles = scene.getTiles();
+        int plane = center.getPlane();
+        if (tiles == null || plane < 0 || plane >= tiles.length || tiles[plane] == null)
+        {
+            return nearby;
+        }
+
+        int cx = center.getX();
+        int cy = center.getY();
+
+        for (int dx = -distance; dx <= distance; dx++)
+        {
+            for (int dy = -distance; dy <= distance; dy++)
             {
-                candidates.add(tile);
+                int tx = cx + dx;
+                int ty = cy + dy;
+                WorldPoint candidate = new WorldPoint(tx, ty, plane);
+                LocalPoint lp = LocalPoint.fromWorld(worldView, candidate);
+                if (lp == null)
+                {
+                    continue;
+                }
+
+                int sceneX = lp.getSceneX();
+                int sceneY = lp.getSceneY();
+                if (sceneX < 0 || sceneX >= tiles[plane].length
+                        || tiles[plane][sceneX] == null
+                        || sceneY < 0 || sceneY >= tiles[plane][sceneX].length)
+                {
+                    continue;
+                }
+
+                if (tiles[plane][sceneX][sceneY] == null)
+                {
+                    continue;
+                }
+
+                nearby.add(candidate);
             }
         }
 
-        return candidates;
+        return nearby;
+    }
+
+    private List<WorldPoint> getDangerSpawnCandidates(WorldPoint currentTile)
+    {
+        Set<WorldPoint> allColored = getAllColoredTiles();
+        Map<WorldPoint, TileModifier> mods = tileModifiers.get(normalizeGroupName(activeGroupName));
+        Set<WorldPoint> pool = new HashSet<>();
+
+        // Collect positions of all players (host + participants)
+        List<WorldPoint> playerPositions = new ArrayList<>();
+        if (currentTile != null)
+        {
+            playerPositions.add(currentTile);
+        }
+        for (WorldPoint pos : multiplayerParticipantPositions.values())
+        {
+            if (pos != null && !playerPositions.contains(pos))
+            {
+                playerPositions.add(pos);
+            }
+        }
+
+        // For each player position, find all scene tiles within 3 tiles
+        // that are not colored by any player
+        for (WorldPoint pos : playerPositions)
+        {
+            Set<WorldPoint> nearby = getSceneTilesWithinDistance(pos, 3);
+            for (WorldPoint tile : nearby)
+            {
+                // Skip if colored by any player
+                if (allColored.contains(tile))
+                {
+                    continue;
+                }
+
+                // Apply standard exclusions
+                if (disabledTileTimers.containsKey(tile)
+                        || dangerTileCountdowns.containsKey(tile)
+                        || dangerTileActiveTimers.containsKey(tile)
+                        || validSequenceTiles.contains(tile)
+                        || sequenceHardBonusTiles.containsKey(tile)
+                        || directionalTileDirections.containsKey(tile)
+                        || (resetTile != null && resetTile.equals(tile))
+                        || (mods != null && mods.containsKey(tile)))
+                {
+                    continue;
+                }
+
+                pool.add(tile);
+            }
+        }
+
+        return new ArrayList<>(pool);
     }
 
     private void removeDangerTileToMakeRoom()
@@ -2549,197 +2930,103 @@ public class TileGamePlugin extends Plugin
 
     private void processDisableTick()
     {
-            // Handles disabling tiles when Add Disablers is enabled.
-            if (mode != TileGameMode.LEVEL)
+        // Handles disabling tiles when Add Disablers is enabled.
+        // Disablers spawn at a flat 10% chance per tick in all modes.
+        // The clear (blue) tile removes disablers when stepped on, but they
+        // continue spawning at the same rate — no countdown/re-enable mechanic.
+        if (mode != TileGameMode.LEVEL)
+        {
+            return;
+        }
+
+        if (!isAddDisablersEnabled())
+        {
+            return;
+        }
+
+        if (client.getLocalPlayer() == null)
+        {
+            return;
+        }
+
+        WorldPoint currentTile = client.getLocalPlayer().getWorldLocation();
+        if (currentTile == null)
+        {
+            return;
+        }
+
+        // Ensure a clear tile exists if there are active disablers
+        if (!disabledTileTimers.isEmpty() && resetTile == null)
+        {
+            WorldPoint resetPoint = findWalkableResetCandidate(currentTile, 4);
+            if (resetPoint != null)
             {
-                return;
+                resetDisabledTile = disabledTileTimers.keySet().iterator().next();
+                resetTile = resetPoint;
             }
+        }
 
-            if (!isAddDisablersEnabled())
+        // Flat 10% chance per tick to spawn disablers (all modes)
+        java.util.Random random = new java.util.Random();
+        if (random.nextDouble() >= DISABLER_SPAWN_CHANCE)
+        {
+            return;
+        }
+
+        // If in sequence mode, disable all valid next tiles
+        if (isSequenceModeEnabled())
+        {
+            // Do not allow more than one disabler event active at a time
+            if (!disabledTileTimers.isEmpty())
             {
-                return;
-            }
-
-            if (client.getLocalPlayer() == null)
-            {
-                return;
-            }
-
-            WorldPoint currentTile = client.getLocalPlayer().getWorldLocation();
-            if (currentTile == null)
-            {
-                return;
-            }
-
-            // Hard mode: disablers are temporary — re-enable after countdown
-                        if (isHardMode)
-                        {
-                            if (isSequenceModeEnabled())
-                            {
-                                // --- Sequence mode: existing countdown-based logic ---
-                                if (disablerCountdown > 0)
-                                {
-                                    disablerCountdown--;
-                                    if (disablerCountdown <= 0)
-                                    {
-                                    // Re-enable disablers and spawn new clear tile
-                                        for (WorldPoint tile : validSequenceTiles)
-                                        {
-                                            if (!runColoredTiles.containsKey(tile))
-                                            {
-                                                disabledTileTimers.put(tile, 1);
-                                            }
-                                        }
-
-                                        if (!disabledTileTimers.isEmpty())
-                                        {
-                                            resetTile = findWalkableResetCandidate(currentTile, 4);
-                                            // Clear the countdown — it will be set again when clear tile is stepped on
-                                            disablerCountdown = 0;
-                                        }
-                                    }
-                                    return;
-                                }
-
-                                // If there are active disablers and a clear tile, check if player stepped on it
-                                if (!disabledTileTimers.isEmpty())
-                                {
-                                    if (resetTile != null && resetTile.equals(currentTile))
-                                    {
-                                        // Player stepped on clear tile — temporarily clear disablers and start countdown
-                                        clearDisablersFromReset(currentTile);
-                                        return;
-                                    }
-
-                                    // Clear tile exists but player hasn't stepped on it yet — ensure one exists
-                                    if (resetTile == null)
-                                    {
-                                        resetTile = findWalkableResetCandidate(currentTile, 4);
-                                    }
-
-                                    return;
-                                }
-
-                                // No active disablers — spawn at 10% chance per tick (all valid tiles)
-                                if (new java.util.Random().nextDouble() < 0.10)
-                                {
-                                    for (WorldPoint tile : validSequenceTiles)
-                                    {
-                                        if (!runColoredTiles.containsKey(tile) && !disabledTileTimers.containsKey(tile))
-                                        {
-                                            disabledTileTimers.put(tile, 1);
-                                        }
-                                    }
-
-                                    if (!disabledTileTimers.isEmpty())
-                                    {
-                                        resetTile = findWalkableResetCandidate(currentTile, 4);
-                                    }
-                                }
-
-                                return;
-                            }
-                            else
-                            {
-                                // --- Non-sequence hard mode: timed disabler spawning ---
-
-                                // Tick down the spawn timer
-                                nonSeqDisablerTimer--;
-                                if (nonSeqDisablerTimer <= 0)
-                                {
-                                    // Spawn a disabler on a random uncolored, non-disabled tile
-                                    List<WorldPoint> uncolored = new ArrayList<>();
-                                    for (WorldPoint tile : activeLevelGroupTiles)
-                                    {
-                                        if (!runColoredTiles.containsKey(tile) && !disabledTileTimers.containsKey(tile))
-                                        {
-                                            uncolored.add(tile);
-                                        }
-                                    }
-                                    if (!uncolored.isEmpty())
-                                    {
-                                        disabledTileTimers.put(uncolored.get(new java.util.Random().nextInt(uncolored.size())), 1);
-                                    }
-
-                                    if (!disabledTileTimers.isEmpty() && resetTile == null)
-                                    {
-                                        resetTile = findWalkableResetCandidate(currentTile, 4);
-                                    }
-
-                                    nonSeqDisablerTimer = 2;
-                                }
-
-                                // Check if player stepped on the clear tile
-                                if (!disabledTileTimers.isEmpty() && resetTile != null && resetTile.equals(currentTile))
-                                {
-                                    clearDisablersFromReset(currentTile);
-                                    return;
-                                }
-                                else if (!disabledTileTimers.isEmpty() && resetTile == null)
-                                {
-                                    resetTile = findWalkableResetCandidate(currentTile, 4);
-                                }
-
-                                return;
-                            }
-                        }
-
-            // --- Non-hard mode behavior below ---
-            if (!disabledTileTimers.isEmpty() && resetTile == null)
-            {
-                WorldPoint resetPoint = findWalkableResetCandidate(currentTile, 4);
-                if (resetPoint != null)
+                if (resetTile == null)
                 {
-                    resetDisabledTile = disabledTileTimers.keySet().iterator().next();
-                    resetTile = resetPoint;
+                    WorldPoint resetPoint = findWalkableResetCandidate(currentTile, 4);
+                    if (resetPoint != null)
+                    {
+                        resetTile = resetPoint;
+                    }
+                }
+                return;
+            }
+
+            // Disable all valid next tiles that aren't already colored or disabled
+            for (WorldPoint tile : validSequenceTiles)
+            {
+                if (!runColoredTiles.containsKey(tile) && !disabledTileTimers.containsKey(tile))
+                {
+                    disabledTileTimers.put(tile, 1);
                 }
             }
 
-            java.util.Random random = new java.util.Random();
-            // ~15% chance per tick to spawn a new disabled tile
-            if (random.nextDouble() >= 0.15)
+            if (!disabledTileTimers.isEmpty())
             {
-                return;
+                // The reset tile lets the player re-enable all disabled tiles at once
+                resetTile = findWalkableResetCandidate(currentTile, 4);
             }
 
-            // If in sequence mode, disable all valid next tiles
-                    if (isSequenceModeEnabled())
-                    {
-                        // Do not allow more than one disabler event active at a time
-                        if (!disabledTileTimers.isEmpty())
-                        {
-                            if (resetTile == null)
-                            {
-                                WorldPoint resetPoint = findWalkableResetCandidate(currentTile, 4);
-                                if (resetPoint != null)
-                                {
-                                    resetTile = resetPoint;
-                                }
-                            }
+            return;
+        }
 
-                            return;
-                        }
+        // Non-sequence mode: disable a random nearby tile within Manhattan distance 3 of the player
+        List<WorldPoint> candidates = new ArrayList<>();
+        for (WorldPoint t : activeLevelGroupTiles)
+        {
+            if (runColoredTiles.containsKey(t) || disabledTileTimers.containsKey(t) || t.equals(currentTile))
+            {
+                continue;
+            }
 
-                        // Disable all valid next tiles that aren't already colored or disabled
-                        for (WorldPoint tile : validSequenceTiles)
-                        {
-                            if (!runColoredTiles.containsKey(tile) && !disabledTileTimers.containsKey(tile))
-                            {
-                                disabledTileTimers.put(tile, 1);
-                            }
-                        }
+            int dist = Math.abs(t.getX() - currentTile.getX()) + Math.abs(t.getY() - currentTile.getY());
+            if (dist <= 3 && isWalkableAndVisible(t))
+            {
+                candidates.add(t);
+            }
+        }
 
-                        if (!disabledTileTimers.isEmpty())
-                        {
-                            // The reset tile lets the player re-enable all disabled tiles at once
-                            resetTile = findWalkableResetCandidate(currentTile, 4);
-                        }
-
-                        return;
-                    }
-
-            // Otherwise (not sequence mode or falling back), disable a random nearby tile within Manhattan distance 3 of the player
-            List<WorldPoint> candidates = new ArrayList<>();
+        // Fallback: if no visible/walkable candidates, allow nearby tiles ignoring visibility
+        if (candidates.isEmpty())
+        {
             for (WorldPoint t : activeLevelGroupTiles)
             {
                 if (runColoredTiles.containsKey(t) || disabledTileTimers.containsKey(t) || t.equals(currentTile))
@@ -2748,87 +3035,41 @@ public class TileGamePlugin extends Plugin
                 }
 
                 int dist = Math.abs(t.getX() - currentTile.getX()) + Math.abs(t.getY() - currentTile.getY());
-                if (dist <= 3 && isWalkableAndVisible(t))
+                if (dist <= 3)
                 {
                     candidates.add(t);
                 }
             }
+        }
 
-            // Fallback: if no visible/walkable candidates, allow nearby tiles ignoring visibility (but still not colored/disabled)
-            if (candidates.isEmpty())
+        if (!candidates.isEmpty())
+        {
+            WorldPoint tile = candidates.get(random.nextInt(candidates.size()));
+            disabledTileTimers.put(tile, 1);
+
+            if (resetDisabledTile == null)
             {
-                for (WorldPoint t : activeLevelGroupTiles)
+                WorldPoint resetPoint = findWalkableResetCandidate(currentTile, 4);
+                if (resetPoint != null)
                 {
-                    if (runColoredTiles.containsKey(t) || disabledTileTimers.containsKey(t) || t.equals(currentTile))
-                    {
-                        continue;
-                    }
-
-                    int dist = Math.abs(t.getX() - currentTile.getX()) + Math.abs(t.getY() - currentTile.getY());
-                    if (dist <= 3)
-                    {
-                        candidates.add(t);
-                    }
-                }
-            }
-
-            if (!candidates.isEmpty())
-            {
-                WorldPoint tile = candidates.get(random.nextInt(candidates.size()));
-                disabledTileTimers.put(tile, 1);
-
-                if (resetDisabledTile == null)
-                {
-                    WorldPoint resetPoint = findWalkableResetCandidate(currentTile, 4);
-                    if (resetPoint != null)
-                    {
-                        resetDisabledTile = tile;
-                        resetTile = resetPoint;
-                    }
+                    resetDisabledTile = tile;
+                    resetTile = resetPoint;
                 }
             }
         }
+    }
 
-    // Clears active disablers as if the reset (blue) tile at fromTile was stepped on,
-    // applying the mode-appropriate follow-up timers.
+    // Clears active disablers when the player steps on the reset (blue) tile.
+    // No countdown is started — disablers will continue spawning at the flat 10% rate.
     private void clearDisablersFromReset(WorldPoint fromTile)
     {
         disabledTileTimers.clear();
         resetDisabledTile = null;
         resetTile = null;
-
-        if (!isHardMode)
-        {
-            return;
-        }
-
         if (isSequenceModeEnabled())
         {
             sequenceShrinkDelay = 1;
-
-            // Calculate ticks to reach closest valid tile from the reset tile
-            int minDist = Integer.MAX_VALUE;
-            for (WorldPoint tile : validSequenceTiles)
-            {
-                if (!runColoredTiles.containsKey(tile))
-                {
-                    int dist = Math.abs(tile.getX() - fromTile.getX()) + Math.abs(tile.getY() - fromTile.getY());
-                    if (dist < minDist)
-                    {
-                        minDist = dist;
-                    }
-                }
-            }
-
-            if (minDist == Integer.MAX_VALUE)
-            {
-                minDist = 1;
-            }
-            disablerCountdown = minDist + 1;
-        }
-        else
-        {
-            nonSeqDisablerTimer = 3;
+            sequenceShrinkDelaySetTick = client.getTickCount();
         }
     }
 
@@ -2843,6 +3084,37 @@ public class TileGamePlugin extends Plugin
         lastDisablerClearRequestTile = tile;
         TileGameMultiplayerMessage message = new TileGameMultiplayerMessage();
         message.type = "clear_disablers";
+        message.roomId = multiplayerRoomId;
+        message.player = currentPlayerName();
+        message.tile = toMultiplayerTile(tile);
+        sendMultiplayerMessage(message);
+    }
+
+    private void sendMultiplayerSequenceClaimIfNeeded(WorldPoint tile)
+    {
+        if (!isMultiplayerParticipant()
+                || !isSequenceModeEnabled()
+                || !multiplayerSequenceSharedMode
+                || multiplayerRoomId.isEmpty()
+                || tile == null)
+        {
+            return;
+        }
+
+        TileGameMultiplayerMessage message = new TileGameMultiplayerMessage();
+        message.type = "sequence_claim";
+        message.roomId = multiplayerRoomId;
+        message.player = currentPlayerName();
+        message.tile = toMultiplayerTile(tile);
+        message.sequenceNumber = currentSequenceNumber;
+        sendMultiplayerMessage(message);
+    }
+
+    // Participant-side: tell the host that a directional tile was consumed
+    private void requestMultiplayerDirectionalClear(WorldPoint tile)
+    {
+        TileGameMultiplayerMessage message = new TileGameMultiplayerMessage();
+        message.type = "clear_directional";
         message.roomId = multiplayerRoomId;
         message.player = currentPlayerName();
         message.tile = toMultiplayerTile(tile);
@@ -2897,8 +3169,7 @@ public class TileGamePlugin extends Plugin
                 ? processSyncedDirectionalTile(currentTile)
                 : processDirectionalTiles(currentTile);
 
-        // If the player stepped on the reset tile, re-enable all currently-disabled tiles
-                // (In hard mode this is handled by processDisableTick for the countdown mechanic)
+        // If the player stepped on the reset tile, clear all currently-disabled tiles
                 if (resetTile != null && resetTile.equals(currentTile))
                 {
                     if (multiplayerParticipant)
@@ -2906,11 +3177,9 @@ public class TileGamePlugin extends Plugin
                         // Participants ask the host to clear disablers for everyone
                         requestMultiplayerDisablerClear(currentTile);
                     }
-                    else if (!isHardMode)
+                    else
                     {
-                        disabledTileTimers.clear();
-                        resetDisabledTile = null;
-                        resetTile = null;
+                        clearDisablersFromReset(currentTile);
                     }
                 }
 
@@ -3028,7 +3297,14 @@ public class TileGamePlugin extends Plugin
                             // Wait one tick after refreshing before shrinking starts
                             if (sequenceShrinkDelay > 0)
                             {
-                                sequenceShrinkDelay--;
+                                if (sequenceShrinkDelaySetTick != currentTick)
+                                {
+                                    sequenceShrinkDelay--;
+                                    if (sequenceShrinkDelay <= 0)
+                                    {
+                                        sequenceShrinkDelaySetTick = -1;
+                                    }
+                                }
                             }
                             else if (!validSequenceTiles.isEmpty())
                             {
@@ -3103,9 +3379,10 @@ public class TileGamePlugin extends Plugin
             }
         }
 
+        Set<WorldPoint> coloredTiles = multiplayerActive ? getAllColoredTiles() : runColoredTiles.keySet();
         if (mode == TileGameMode.LEVEL
                 && !activeLevelGroupTiles.isEmpty()
-                && !runColoredTiles.keySet().containsAll(activeLevelGroupTiles))
+                && !coloredTiles.containsAll(activeLevelGroupTiles))
         {
             if (!multiplayerParticipant)
             {
@@ -3113,7 +3390,7 @@ public class TileGamePlugin extends Plugin
             }
         }
 
-        if (mode == TileGameMode.LEVEL && !activeLevelGroupTiles.isEmpty() && runColoredTiles.keySet().containsAll(activeLevelGroupTiles))
+        if (mode == TileGameMode.LEVEL && !activeLevelGroupTiles.isEmpty() && coloredTiles.containsAll(activeLevelGroupTiles))
         {
             completeLevel();
             return;
@@ -3173,12 +3450,16 @@ public class TileGamePlugin extends Plugin
         resetDisabledTile = null;
         resetTile = null;
         lastDisablerClearRequestTile = null;
+        multiplayerParticipantColoredTiles.clear();
+        multiplayerParticipantPositions.clear();
         usedBonusTiles.clear();
         dangerTileCountdowns.clear();
         dangerTileActiveTimers.clear();
         directionalTileDirections.clear();
                 sequenceOrder.clear();
         validSequenceTiles.clear();
+        recentSequenceBatches.clear();
+        acceptedSequenceClaims.clear();
         sequenceHardBonusTiles.clear();
         sequenceHardBonusTimers.clear();
                 sequenceTileTimers.clear();
@@ -3188,9 +3469,9 @@ public class TileGamePlugin extends Plugin
                 isAddDisablersMode = false;
                 isDangerTilesMode = false;
                 isDirectionalTilesMode = false;
-                disablerCountdown = 0;
                 sequenceShrinkDelay = 0;
-                                nonSeqDisablerTimer = 3;
+                sequenceShrinkDelaySetTick = -1;
+                multiplayerSequenceSharedMode = true;
                 powerUpTiles.clear();
                 powerUpTimers.clear();
                 totalRunTicks = 0;
@@ -3384,7 +3665,7 @@ public class TileGamePlugin extends Plugin
                             "Current Game card:\n" +
                             "Mode shows whether you are idle, choosing tiles, editing, counting down, running, or finished. Group is the active level. Ticks is elapsed game ticks in the current run. Missed counts ticks without a new target tile. Revisits counts doubled-back tiles. Grade previews the current run grade once a run has started. Levels is your saved level count. The restart button reruns the active level; stop clears the current run or selection.\n\n" +
                             "Levels card:\n" +
-                            "+ starts a new level selection. While choosing or editing, left-click tiles to add/remove them, then press save to name or update the level. Hold Ctrl while left-clicking to walk to a tile instead of marking it. Each level row has view/hide, play, edit, and delete buttons. The Sequence Mode checkbox marks 4 valid tiles using 2/4/6/8-step walk-distance bands — closer tiles get shorter timers, then color one to reveal 4 new options. In sequenced hardmode, a pink BONUS tile can briefly appear on an unmarked tile within 4 tiles of the player; step on it to color extra tiles and advance the sequence. Directional Tiles can spawn green direction labels on unmarked tiles; step onto them from the marked side to clear them. Danger Tiles can spawn yellow countdown tiles in batches of 3 within 10 tiles of the player, while leaving at least 4 safe tiles; when one reaches 0 and is stepped on, it uncolors a random colored tile. View paints every tile in that level black so you can inspect the route before running it."
+                            "+ starts a new level selection. While choosing or editing, left-click tiles to add/remove them, then press save to name or update the level. Hold Ctrl while left-clicking to walk to a tile instead of marking it. Each level row has view/hide, play, edit, and delete buttons. The Sequence Mode checkbox marks 4 valid tiles using 2/4/6/8-step walk-distance bands — closer tiles get shorter timers, then color one to reveal 4 new options. In sequenced hardmode, shared next tiles are chosen from tiles that are still unmarked for every player; if no shared tiles remain, each client falls back to its own local unmarked tiles. A pink BONUS tile can still briefly appear on an unmarked tile within 4 tiles of the player; step on it to color extra tiles and advance the sequence. Directional Tiles can spawn green direction labels on unmarked tiles; step onto them from the marked side to clear them. Danger Tiles can spawn yellow countdown tiles in batches of 3 within 10 tiles of the player, while leaving at least 4 safe tiles; when one reaches 0 and is stepped on, it uncolors a random colored tile. View paints every tile in that level black so you can inspect the route before running it."
             );
             text.setEditable(false);
             text.setLineWrap(true);
@@ -3430,16 +3711,61 @@ public class TileGamePlugin extends Plugin
 
         String groupName = normalizeGroupName(level.name);
         hideViewedGroups();
-        groups.put(groupName, fromMultiplayerTiles(level.tiles));
-        highscores.remove(groupName);
         pendingSequenceMode = level.sequenceMode;
         pendingAddDisablers = level.addDisablers || level.hardMode;
         pendingDangerTiles = level.dangerTiles || level.hardMode;
         pendingDirectionalTiles = level.directionalTiles || level.hardMode;
         pendingHardMode = level.hardMode;
-        tileModifiers.put(groupName, fromMultiplayerModifierTiles(level.modifiers));
         activeGroupName = groupName;
+
+        boolean matchesExistingLevel = isMatchingMultiplayerLevel(groupName, level);
+        if (!matchesExistingLevel)
+        {
+            groups.put(groupName, fromMultiplayerTiles(level.tiles));
+            highscores.remove(groupName);
+            tileModifiers.put(groupName, fromMultiplayerModifierTiles(level.modifiers));
+        }
+
         savePersistentData();
+    }
+
+    private boolean isMatchingMultiplayerLevel(String groupName, TileGameMultiplayerLevel level)
+    {
+        if (groupName == null || level == null)
+        {
+            return false;
+        }
+
+        Set<WorldPoint> existingTiles = groups.get(groupName);
+        if (existingTiles == null || !existingTiles.equals(fromMultiplayerTiles(level.tiles)))
+        {
+            return false;
+        }
+
+        Map<WorldPoint, TileModifier> existingModifiers = tileModifiers.get(groupName);
+        Map<WorldPoint, TileModifier> incomingModifiers = fromMultiplayerModifierTiles(level.modifiers);
+        if (existingModifiers == null)
+        {
+            return incomingModifiers.isEmpty();
+        }
+
+        return existingModifiers.equals(incomingModifiers);
+    }
+
+    private boolean isMatchingImportedLevel(String groupName, List<TileGameTileDto> tiles)
+    {
+        if (groupName == null)
+        {
+            return false;
+        }
+
+        Set<WorldPoint> existingTiles = groups.get(groupName);
+        if (existingTiles == null)
+        {
+            return false;
+        }
+
+        return existingTiles.equals(toWorldPoints(tiles));
     }
 
     private void setMultiplayerModifierSnapshot(TileGameMultiplayerLevel level)
@@ -3494,6 +3820,7 @@ public class TileGamePlugin extends Plugin
         TileGameMultiplayerState state = new TileGameMultiplayerState();
         state.mode = mode.name();
         state.sequenceModeEnabled = isSequenceMode;
+        state.sequenceSharedModeEnabled = multiplayerSequenceSharedMode;
         state.addDisablersEnabled = isAddDisablersMode;
         state.dangerTilesEnabled = isDangerTilesMode;
         state.directionalTilesEnabled = isDirectionalTilesMode;
@@ -3501,10 +3828,10 @@ public class TileGamePlugin extends Plugin
         state.countdownTicksRemaining = countdownTicksRemaining;
         state.totalRunTicks = totalRunTicks;
         state.currentSequenceNumber = currentSequenceNumber;
-        state.disablerCountdown = disablerCountdown;
         state.sequenceShrinkDelay = sequenceShrinkDelay;
-        state.nonSeqDisablerTimer = nonSeqDisablerTimer;
         state.activeLevelTiles = toMultiplayerTiles(activeLevelGroupTiles);
+        state.runColoredTiles = toMultiplayerTiles(getAllColoredTiles());
+        state.position = toMultiplayerTile(getCurrentPlayerTile());
         state.validSequenceTiles = toMultiplayerTiles(validSequenceTiles);
         state.sequenceTileTimers = toTimedTiles(sequenceTileTimers);
         state.sequenceHardBonusTiles = toTimedTiles(sequenceHardBonusTiles);
@@ -3521,6 +3848,9 @@ public class TileGamePlugin extends Plugin
 
     private void applyMultiplayerState(TileGameMultiplayerState state)
     {
+        boolean sharedSequenceMode = state.sequenceSharedModeEnabled;
+        boolean wasSharedSequenceMode = multiplayerSequenceSharedMode;
+
         try
         {
             mode = TileGameMode.valueOf(state.mode);
@@ -3534,17 +3864,12 @@ public class TileGamePlugin extends Plugin
         totalRunTicks = state.totalRunTicks;
         isHardMode = state.hardModeEnabled;
         isSequenceMode = state.sequenceModeEnabled;
+        multiplayerSequenceSharedMode = sharedSequenceMode;
         isAddDisablersMode = state.hardModeEnabled || state.addDisablersEnabled;
         isDangerTilesMode = state.hardModeEnabled || state.dangerTilesEnabled;
         isDirectionalTilesMode = state.hardModeEnabled || state.directionalTilesEnabled;
         setMultiplayerModifierSnapshot(isSequenceMode, isAddDisablersMode, isDangerTilesMode, isDirectionalTilesMode, isHardMode);
-        currentSequenceNumber = state.currentSequenceNumber;
-        disablerCountdown = state.disablerCountdown;
-        sequenceShrinkDelay = state.sequenceShrinkDelay;
-        nonSeqDisablerTimer = state.nonSeqDisablerTimer;
         replaceSet(activeLevelGroupTiles, fromMultiplayerTiles(state.activeLevelTiles));
-        replaceSet(validSequenceTiles, fromMultiplayerTiles(state.validSequenceTiles));
-        replaceTimedMap(sequenceTileTimers, state.sequenceTileTimers);
         replaceTimedMap(sequenceHardBonusTiles, state.sequenceHardBonusTiles);
         replaceTimedMap(sequenceHardBonusTimers, state.sequenceHardBonusTimers);
         replaceTimedMap(disabledTileTimers, state.disabledTileTimers);
@@ -3560,6 +3885,26 @@ public class TileGamePlugin extends Plugin
         replaceDirectionalMap(directionalTileDirections, state.directionalTiles);
         replaceTimedMap(powerUpTiles, state.powerUpTiles);
         replaceTimedMap(powerUpTimers, state.powerUpTimers);
+
+        if (sharedSequenceMode)
+        {
+            currentSequenceNumber = state.currentSequenceNumber;
+            sequenceShrinkDelay = state.sequenceShrinkDelay;
+            replaceSet(validSequenceTiles, fromMultiplayerTiles(state.validSequenceTiles));
+            replaceTimedMap(sequenceTileTimers, state.sequenceTileTimers);
+            if (isMultiplayerParticipant())
+            {
+                pruneLocallyColoredSequenceTiles();
+            }
+        }
+        else if (wasSharedSequenceMode && isSequenceMode)
+        {
+            currentSequenceNumber = state.currentSequenceNumber;
+            sequenceShrinkDelay = state.sequenceShrinkDelay;
+            validSequenceTiles.clear();
+            sequenceTileTimers.clear();
+            selectNextValidTiles();
+        }
     }
 
     private void broadcastMultiplayerStateIfHost()
@@ -4195,11 +4540,6 @@ public class TileGamePlugin extends Plugin
         boolean isHardMode()
         {
             return isHardMode;
-        }
-
-        int getDisablerCountdown()
-        {
-            return disablerCountdown;
         }
 
     Set<WorldPoint> getActiveLevelGroupTiles()
