@@ -596,6 +596,29 @@ class TileGamePanel extends PluginPanel
         if (levelsCard != null)
         {
             setInteractiveComponentsEnabled(levelsCard, !plugin.isInMultiplayerLobby());
+            if (plugin.isInMultiplayerLobby() && plugin.isMultiplayerHost())
+            {
+                if (sequenceCheckbox != null)
+                {
+                    sequenceCheckbox.setEnabled(plugin.canEditSequenceMode());
+                }
+                if (addDisablersCheckbox != null)
+                {
+                    addDisablersCheckbox.setEnabled(plugin.canEditSequenceMode() && !plugin.isHardModeEnabled());
+                }
+                if (dangerTilesCheckbox != null)
+                {
+                    dangerTilesCheckbox.setEnabled(plugin.canEditSequenceMode() && !plugin.isHardModeEnabled());
+                }
+                if (directionalTilesCheckbox != null)
+                {
+                    directionalTilesCheckbox.setEnabled(plugin.canEditSequenceMode() && !plugin.isHardModeEnabled());
+                }
+                if (hardModeCheckbox != null)
+                {
+                    hardModeCheckbox.setEnabled(plugin.canEditSequenceMode());
+                }
+            }
         }
 
         if (gameStateCard != null)
