@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import javax.swing.AbstractButton;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
@@ -87,17 +88,33 @@ class TileGamePanel extends PluginPanel
         levelCreationPanel.setBackground(SECTION_BACKGROUND);
         multiplayerPanel.setBackground(SECTION_BACKGROUND);
 
-        addFullWidth(content, actionPanel(), 0);
-        addFullWidth(content, multiplayerStatusPanel(), 1);
+        addFullWidth(content, card(
+                "Controls",
+                actionPanel(),
+                null,
+                plugin.isControlsCollapsed(),
+                plugin::setControlsCollapsed
+        ), 0);
         addFullWidth(content, card(
                 "Game State",
                 currentGamePanel(),
-                null
+                null,
+                plugin.isGameStateCollapsed(),
+                plugin::setGameStateCollapsed
+        ), 1);
+        addFullWidth(content, card(
+                "Multiplayer",
+                multiplayerStatusPanel(),
+                null,
+                plugin.isMultiplayerCollapsed(),
+                plugin::setMultiplayerCollapsed
         ), 2);
         addFullWidth(content, card(
                 "Levels",
                 levelsCardPanel(),
-                null
+                null,
+                plugin.isLevelsCollapsed(),
+                plugin::setLevelsCollapsed
         ), 3);
 
         add(content, BorderLayout.CENTER);
@@ -395,64 +412,56 @@ class TileGamePanel extends PluginPanel
 
     private JPanel actionPanel()
     {
-        JPanel outer = new JPanel(new GridLayout(4, 1, 0, 6));
+        JPanel outer = new JPanel(new GridLayout(3, 1, 0, 6));
         outer.setBackground(PANEL_BACKGROUND);
         outer.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
-        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 144));
+        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 128));
 
         JPanel topRow = new JPanel(new GridLayout(1, 3, 5, 0));
         topRow.setBackground(PANEL_BACKGROUND);
 
+        paintButton = actionButton("Paint");
+        paintButton.addActionListener(event -> plugin.togglePaintMode());
+        JButton highscoresButton = actionButton("Scores");
+        highscoresButton.addActionListener(event -> showHighscoresDialog());
         JButton helpButton = actionButton("Help");
         helpButton.addActionListener(event -> plugin.showHowToPlay());
 
-        JButton exportButton = actionButton("Export");
-        exportButton.addActionListener(event -> plugin.showExportLevelPicker());
-
-        JButton highscoresButton = actionButton("Scores");
-        highscoresButton.addActionListener(event -> showHighscoresDialog());
-
-        topRow.add(helpButton);
-        topRow.add(exportButton);
+        topRow.add(paintButton);
         topRow.add(highscoresButton);
+        topRow.add(helpButton);
 
         JPanel bottomRow = new JPanel(new GridLayout(1, 3, 5, 0));
         bottomRow.setBackground(PANEL_BACKGROUND);
-
-        paintButton = actionButton("Paint");
-        paintButton.addActionListener(event -> plugin.togglePaintMode());
 
         clearButton = actionButton("Clear");
         clearButton.addActionListener(event -> plugin.clearPaintedTiles());
 
         JButton importButton = actionButton("Import");
         importButton.addActionListener(event -> plugin.importLevelFromClipboard());
+        JButton exportButton = actionButton("Export");
+        exportButton.addActionListener(event -> plugin.showExportLevelPicker());
 
-        bottomRow.add(paintButton);
-        bottomRow.add(clearButton);
         bottomRow.add(importButton);
+        bottomRow.add(exportButton);
+        bottomRow.add(clearButton);
 
         JPanel resetRow = new JPanel(new GridLayout(1, 1, 5, 0));
         resetRow.setBackground(PANEL_BACKGROUND);
         JButton resetViewButton = actionButton("Fix Camera");
-        resetViewButton.setBackground(new Color(255, 235, 59));
+        resetViewButton.setBackground(new Color(255, 64, 64));
+        resetViewButton.setForeground(Color.WHITE);
+        resetViewButton.setFont(resetViewButton.getFont().deriveFont(Font.BOLD, 13f));
         resetViewButton.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(179, 149, 0), 2),
+                BorderFactory.createLineBorder(new Color(160, 0, 0), 2),
                 BorderFactory.createEmptyBorder(5, 4, 5, 4)
         ));
         resetViewButton.addActionListener(event -> plugin.hardSceneReset("manual panel reset"));
         resetRow.add(resetViewButton);
 
-        JPanel multiplayerRow = new JPanel(new GridLayout(1, 1, 5, 0));
-        multiplayerRow.setBackground(PANEL_BACKGROUND);
-        JButton multiplayerButton = actionButton("Multiplayer");
-        multiplayerButton.addActionListener(event -> plugin.showMultiplayerInviteDialog(this));
-        multiplayerRow.add(multiplayerButton);
-
         outer.add(topRow);
         outer.add(bottomRow);
         outer.add(resetRow);
-        outer.add(multiplayerRow);
 
         return outer;
     }
@@ -460,10 +469,7 @@ class TileGamePanel extends PluginPanel
     private JPanel multiplayerStatusPanel()
     {
         multiplayerPanel.setLayout(new BoxLayout(multiplayerPanel, BoxLayout.Y_AXIS));
-        multiplayerPanel.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(CYAN, 1),
-                BorderFactory.createEmptyBorder(8, 8, 8, 8)
-        ));
+        multiplayerPanel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
         updateMultiplayerControls();
         return multiplayerPanel;
     }
@@ -473,6 +479,20 @@ class TileGamePanel extends PluginPanel
         multiplayerPanel.removeAll();
         multiplayerPanel.setLayout(new BoxLayout(multiplayerPanel, BoxLayout.Y_AXIS));
         multiplayerPanel.setBackground(SECTION_BACKGROUND);
+
+        if (!plugin.isInMultiplayerLobby())
+        {
+            JButton startMultiplayerButton = actionButton("Start Multiplayer");
+            startMultiplayerButton.setBackground(new Color(72, 220, 121));
+            startMultiplayerButton.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(new Color(31, 140, 63), 2),
+                    BorderFactory.createEmptyBorder(5, 4, 5, 4)
+            ));
+            startMultiplayerButton.addActionListener(event -> plugin.showMultiplayerInviteDialog(this));
+            startMultiplayerButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+            multiplayerPanel.add(startMultiplayerButton);
+            multiplayerPanel.add(javax.swing.Box.createVerticalStrut(8));
+        }
 
         JLabel status = new JLabel(plugin.getMultiplayerStatusLabel());
         status.setForeground(MUTED_TEXT_COLOR);
@@ -568,7 +588,15 @@ class TileGamePanel extends PluginPanel
 
     private CollapsibleCard card(String title, Component component, String helpText)
     {
-        CollapsibleCard card = new CollapsibleCard(title, component, helpText);
+        CollapsibleCard card = new CollapsibleCard(title, component, helpText, false, null);
+        card.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+        return card;
+    }
+
+    private CollapsibleCard card(String title, Component component, String helpText, boolean initiallyCollapsed, Consumer<Boolean> collapseListener)
+    {
+        CollapsibleCard card = new CollapsibleCard(title, component, helpText, initiallyCollapsed, collapseListener);
         card.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
         return card;
@@ -873,13 +901,17 @@ class TileGamePanel extends PluginPanel
 
     private final class CollapsibleCard extends JPanel
     {
+        private final String title;
         private final JButton toggleButton;
         private final JPanel body;
+        private final Consumer<Boolean> collapseListener;
         private boolean collapsed;
 
-        private CollapsibleCard(String title, Component component, String helpText)
+        private CollapsibleCard(String title, Component component, String helpText, boolean initiallyCollapsed, Consumer<Boolean> collapseListener)
         {
             super(new BorderLayout(0, 6));
+            this.title = title;
+            this.collapseListener = collapseListener;
             setBackground(SECTION_BACKGROUND);
             setAlignmentX(Component.LEFT_ALIGNMENT);
             setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
@@ -888,7 +920,8 @@ class TileGamePanel extends PluginPanel
                     BorderFactory.createEmptyBorder(8, 8, 8, 8)
             ));
 
-            toggleButton = new JButton("v " + title);
+            collapsed = initiallyCollapsed;
+            toggleButton = new JButton((collapsed ? "> " : "v ") + title);
             toggleButton.setHorizontalAlignment(JButton.LEFT);
             toggleButton.setBackground(HEADER_BACKGROUND);
             toggleButton.setForeground(GOLD);
@@ -916,6 +949,7 @@ class TileGamePanel extends PluginPanel
                 body.add(helpRow, BorderLayout.SOUTH);
             }
 
+            body.setVisible(!collapsed);
             add(toggleButton, BorderLayout.NORTH);
             add(body, BorderLayout.CENTER);
         }
@@ -924,7 +958,11 @@ class TileGamePanel extends PluginPanel
         {
             collapsed = !collapsed;
             body.setVisible(!collapsed);
-            toggleButton.setText((collapsed ? "> " : "v ") + toggleButton.getText().substring(2));
+            toggleButton.setText((collapsed ? "> " : "v ") + title);
+            if (collapseListener != null)
+            {
+                collapseListener.accept(collapsed);
+            }
             revalidate();
             repaint();
         }

@@ -1,10 +1,16 @@
 # Introduction
 
+
 TileRacer is a plugin where you are challenged to color all the tiles in various configurations as fast as you can by stepping on them. There are many mechanics and modifiers that make this more difficult than it sounds. You can play by yourself or compete against friends in real time. Anyone can create and share new configurations, and your client tracks your highscores as you improve.
 
-Warning: This plugin submits your username and details about your in-game location to a third-party server while playing in multiplayer mode. No information about you is stored.
+Note: The server configuration can be found on the same Github profile as the plugin source code. No data about you is stored.
 
-# Configuring a Level for Play
+# Requqirements and limitations.
+
+- You must have either the GPU plugin enabled or the 117 HD plugin enabled. Without it, the plugin does not allow you to do anything.
+- If the camera ever breaks (rotating the screen feels off) click the yellow "Reset Camera" button in the game state card. This will be fixed perminately in a later release.
+
+# Configuring a Level for Playu
 
 - Click the "New" button in the levels panel.
 - Click on tiles to mark them as part of the circuit. Marked tiles will appear black.
@@ -25,7 +31,7 @@ To play with friends, one person, the player hosting the match, clicks Multiplay
 
 If at any point you want to leave a game, click the Stop button in the game state card. If the host ends the game, it stops for everybody.
 
-## Game Mechanics
+# Game Mechanics
 
 There are a number of mechanics you can enable before starting a match.
 

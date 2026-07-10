@@ -251,7 +251,14 @@ public class TileGamePlugin extends Plugin
                 .panel(panel)
                 .build();
 
-        SwingUtilities.invokeLater(() -> clientToolbar.addNavigation(navButton));
+        NavigationButton button = navButton;
+        SwingUtilities.invokeLater(() ->
+        {
+            if (navButton == button)
+            {
+                clientToolbar.addNavigation(button);
+            }
+        });
 
         mouseManager.registerMouseListener(chooseMouseListener);
 
@@ -269,8 +276,9 @@ public class TileGamePlugin extends Plugin
 
         if (navButton != null)
         {
-            SwingUtilities.invokeLater(() -> clientToolbar.removeNavigation(navButton));
+            NavigationButton button = navButton;
             navButton = null;
+            SwingUtilities.invokeLater(() -> clientToolbar.removeNavigation(button));
         }
 
         panel = null;
@@ -1208,6 +1216,46 @@ public class TileGamePlugin extends Plugin
     boolean isInMultiplayerLobby()
     {
         return !multiplayerRoomId.isEmpty();
+    }
+
+    boolean isControlsCollapsed()
+    {
+        return config.controlsCollapsed();
+    }
+
+    void setControlsCollapsed(boolean collapsed)
+    {
+        configManager.setConfiguration(CONFIG_GROUP, "controlsCollapsed", collapsed);
+    }
+
+    boolean isMultiplayerCollapsed()
+    {
+        return config.multiplayerCollapsed();
+    }
+
+    void setMultiplayerCollapsed(boolean collapsed)
+    {
+        configManager.setConfiguration(CONFIG_GROUP, "multiplayerCollapsed", collapsed);
+    }
+
+    boolean isGameStateCollapsed()
+    {
+        return config.gameStateCollapsed();
+    }
+
+    void setGameStateCollapsed(boolean collapsed)
+    {
+        configManager.setConfiguration(CONFIG_GROUP, "gameStateCollapsed", collapsed);
+    }
+
+    boolean isLevelsCollapsed()
+    {
+        return config.levelsCollapsed();
+    }
+
+    void setLevelsCollapsed(boolean collapsed)
+    {
+        configManager.setConfiguration(CONFIG_GROUP, "levelsCollapsed", collapsed);
     }
 
     boolean isMultiplayerActive()
@@ -3673,8 +3721,7 @@ public class TileGamePlugin extends Plugin
             WorldView worldView = client.getTopLevelWorldView();
             Scene scene = worldView == null ? null : worldView.getScene();
             Object drawCallbacks = client.getDrawCallbacks();
-            boolean instanced = client.isInInstancedRegion()
-                    || (worldView != null && worldView.isInstance())
+            boolean instanced = (worldView != null && worldView.isInstance())
                     || (scene != null && scene.isInstance());
 
             String sceneIdentityHash = scene == null
@@ -3723,7 +3770,8 @@ public class TileGamePlugin extends Plugin
     {
         clientThread.invokeLater(() ->
         {
-            Scene scene = client.getScene();
+            WorldView worldView = client.getTopLevelWorldView();
+            Scene scene = worldView == null ? null : worldView.getScene();
             if (scene != null)
             {
                 scene.setMinLevel(0);
@@ -3799,17 +3847,18 @@ public class TileGamePlugin extends Plugin
     void showHowToPlay()
     {
         final String HELP_TEXT =
-                "INTRODUCTION\n" +
-                        "\n" +
+                "===== INTRODUCTION =====\n" +
                         "Tile Racer is a plugin where you are challenged with coloring all the tiles in various configurations as fast as you can by stepping on them.\n" +
                         "There are many mechanics and modifiers that make this more difficult than it sounds. You can play by yourself or compete against friends in real time.\n" +
                         "Anyone can create and share new configurations, and your client tracks your highscores as you improve.\n" +
                         "\n" +
-                        "WARNING\n" +
-                        "\n" +
-                        "This plugin submits your username and details about your in-game location to a third-party server while playing in multiplayer mode.\n" +
+                        "===== WARNING =====\n" +
+                        "Note: The server configuration can be found on the same Github profile as the plugin source code. No data about you is stored.\n" +
                         "No information about you is stored.\n" +
                         "\n" +
+                        "===== REQUIREMENTS AND LIMITATIONS =====\n" +
+                        "You must have either the GPU plugin enabled or the 117 HD plugin enabled. Without it, the plugin does not allow you to do anything.\n"+
+                        "If the camera ever breaks (rotating the screen feels off) click the yellow 'Reset Camera' button in the game state card. This will be fixed perminately in a later release.\n" +
                         "CONFIGURING A LEVEL FOR PLAY\n" +
                         "\n" +
                         "1. Click the \"New\" button in the levels panel.\n" +
@@ -3832,15 +3881,14 @@ public class TileGamePlugin extends Plugin
                         "   - Pencil: edit the level.\n" +
                         "   - X: remove the level.\n" +
                         "\n" +
-                        "PLAYING A GAME\n" +
-                        "\n" +
+                        "===== PLAYING A GAME =====\n" +
                         "There are two ways to play: solo and with friends.\n" +
                         "\n" +
-                        "SOLO PLAY\n" +
+                        "1. SOLO PLAY\n" +
                         "\n" +
                         "To play alone, configure your mechanics using the check boxes in the levels card, then click the Play button next to the level you want to play.\n" +
                         "\n" +
-                        "MULTIPLAYER\n" +
+                        "2. MULTIPLAYER\n" +
                         "\n" +
                         "To play with friends, one person hosts the match by clicking Multiplayer, choosing the level, and selecting the friends who will receive an invite.\n" +
                         "Invited players will see an \"Invite Pending\" button appear in the multiplayer panel. They can accept or decline.\n" +
@@ -3850,70 +3898,69 @@ public class TileGamePlugin extends Plugin
                         "\n" +
                         "The game ends when someone colors all the tiles. The winner is then broadcast to all players.\n" +
                         "\n" +
-                        "LEAVING A GAME\n" +
+                        "3. LEAVING A GAME\n" +
                         "\n" +
                         "If you want to leave a game, click the Stop button in the game state card.\n" +
                         "If the host ends the game, it stops for everybody.\n" +
                         "\n" +
-                        "GAME MECHANICS\n" +
-                        "\n" +
+                        "===== GAME MECHANICS =====\n" +
                         "There are a number of mechanics you can enable before starting a match.\n" +
                         "\n" +
-                        "SEQUENCE MODE\n" +
+                        "1. SEQUENCE MODE\n" +
                         "\n" +
                         "This mode forces you to choose between a small number of tiles that disappear quickly.\n" +
                         "Valid tiles have a number on them that counts down every tick.\n" +
                         "When the number reaches 0, that tile is no longer a valid move.\n" +
                         "You must prioritize coloring tiles quickly, while also avoiding tiles you cannot reach in time.\n" +
                         "\n" +
-                        "DISABLERS\n" +
+                        "2. DISABLERS\n" +
                         "\n" +
                         "Disablers are special modifiers that randomly appear with a red border.\n" +
                         "They prevent you from coloring the tile they spawn on.\n" +
                         "Disablers must be cleared by stepping on the blue-bordered tile that appears.\n" +
                         "\n" +
-                        "DANGER TILES\n" +
+                        "3. DANGER TILES\n" +
                         "\n" +
                         "Danger tiles first appear with a small yellow countdown.\n" +
                         "When the countdown reaches zero, the whole tile turns yellow and becomes active.\n" +
                         "For every tick you stand on an active danger tile, one of your previously colored tiles becomes uncolored and must be colored again.\n" +
                         "\n" +
-                        "DIRECTIONAL TILES\n" +
+                        "4. DIRECTIONAL TILES\n" +
                         "\n" +
                         "Directional tiles are marked with green text representing a direction, such as NW for north-west.\n" +
                         "These tiles can only be colored by walking onto them from the shown direction.\n" +
                         "\n" +
-                        "HARD MODE\n" +
+                        "5.HARD MODE\n" +
                         "\n" +
                         "Hard mode automatically enables disablers, danger tiles, and directional tiles.\n" +
                         "Hard mode scores are placed in a separate category from normal runs.\n" +
                         "\n" +
-                        "OTHER PLUGIN FUNCTIONS\n" +
+                        "===== OTHER PLUGIN FUNCTIONS =====\n" +
                         "\n" +
-                        "EXPORT\n" +
+                        "1. EXPORT\n" +
                         "\n" +
                         "Export copies level data to your system clipboard.\n" +
                         "If you send this data to another user, they can import your level.\n" +
                         "\n" +
-                        "IMPORT\n" +
+                        "2, IMPORT\n" +
                         "\n" +
                         "Import reads level data from your clipboard.\n" +
                         "If the data is a valid level design, the level will be added to your plugin.\n" +
                         "\n" +
-                        "PAINT\n" +
+                        "3. PAINT\n" +
                         "\n" +
                         "Paint lets you freely color tiles as you walk around the game.\n" +
                         "There is no score and no modifiers. It is just colorful tile vomit.\n" +
                         "\n" +
-                        "CLEAR\n" +
+                        "4. CLEAR\n" +
                         "\n" +
                         "Clear removes any tiles you have painted with the Paint command.\n" +
                         "\n" +
-                        "SCORES\n" +
+                        "5. SCORES\n" +
                         "\n" +
                         "Shows the highscores.\n" +
                         "\n" +
-                        "HELP\n" +
+                        "6. HELP\n" +
                         "\n" +
                         "Shows this help text.\n";
         SwingUtilities.invokeLater(() ->

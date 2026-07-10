@@ -35,4 +35,48 @@ public interface TileGameConfig extends Config
 	{
 		return Color.BLACK;
 	}
+
+	@ConfigItem(
+		keyName = "controlsCollapsed",
+		name = "Collapse Controls",
+		description = "Remember whether the Controls section is collapsed.",
+		position = 2
+	)
+	default boolean controlsCollapsed()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "multiplayerCollapsed",
+		name = "Collapse Multiplayer",
+		description = "Remember whether the Multiplayer section is collapsed.",
+		position = 3
+	)
+	default boolean multiplayerCollapsed()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "gameStateCollapsed",
+		name = "Collapse Game State",
+		description = "Remember whether the Game State section is collapsed.",
+		position = 4
+	)
+	default boolean gameStateCollapsed()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "levelsCollapsed",
+		name = "Collapse Levels",
+		description = "Remember whether the Levels section is collapsed.",
+		position = 5
+	)
+	default boolean levelsCollapsed()
+	{
+		return false;
+	}
 }
