@@ -1,4 +1,4 @@
-Overview of com.tilegame classes
+Overview of com.tileracer classes
 
 TileGameConfig.java
 - Lightweight Runelite Config interface for the plugin. Holds @ConfigGroup("tilegame") so plugin configuration can be stored/retrieved by the framework.

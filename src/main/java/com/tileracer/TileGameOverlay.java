@@ -1,4 +1,4 @@
-package com.tilegame;
+package com.tileracer;
 
 import java.awt.AlphaComposite;
 import java.awt.BasicStroke;

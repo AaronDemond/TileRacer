@@ -1,24 +1,21 @@
-package com.tilegame;
+package com.tileracer;
 import java.awt.image.BufferedImage;
 import net.runelite.client.util.ImageUtil;
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
 import com.google.inject.Provides;
-import java.awt.BasicStroke;
+
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
-import java.awt.Graphics2D;
 import java.awt.GridLayout;
 import java.awt.Polygon;
-import java.awt.RenderingHints;
 import java.awt.Toolkit;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
 import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.MouseEvent;
-import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
@@ -37,9 +34,6 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import javax.inject.Inject;
-import javax.sound.sampled.AudioFormat;
-import javax.sound.sampled.AudioSystem;
-import javax.sound.sampled.SourceDataLine;
 import javax.swing.BorderFactory;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
@@ -79,7 +73,7 @@ import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.Text;
 
 @PluginDescriptor(
-        name = "Tile Game",
+        name = "Tile Racer",
         description = "Paint true tiles, build tile groups, and race tile-completion levels.",
         tags = {"tile", "true tile", "movement", "practice", "game"}
 )
@@ -251,7 +245,7 @@ public class TileGamePlugin extends Plugin
         final BufferedImage icon =
                 ImageUtil.loadImageResource(getClass(), "/com/tileracer/icon.png");
         navButton = NavigationButton.builder()
-                .tooltip("TileRacer")
+                .tooltip("Tile Racer")
                 .icon(icon)
                 .priority(6)
                 .panel(panel)
@@ -261,7 +255,7 @@ public class TileGamePlugin extends Plugin
 
         mouseManager.registerMouseListener(chooseMouseListener);
 
-        say("Tile Game loaded. Use the side-panel buttons to create, view, play, edit, import, and export levels.");
+        say("Tile Racer loaded. Use the side-panel buttons to create, view, play, edit, import, and export levels.");
     }
 
     @Override
@@ -375,7 +369,7 @@ public class TileGamePlugin extends Plugin
         }
         catch (UnsupportedFlavorException | IOException ex)
         {
-            showHelpOverhead("Clipboard does not contain readable Tile Game JSON.");
+            showHelpOverhead("Clipboard does not contain readable Tile Racer JSON.");
             return;
         }
 
@@ -392,7 +386,7 @@ public class TileGamePlugin extends Plugin
         }
         catch (JsonParseException ex)
         {
-            showHelpOverhead("Clipboard does not contain valid Tile Game JSON.");
+            showHelpOverhead("Clipboard does not contain valid Tile Racer JSON.");
             return;
         }
 
@@ -412,7 +406,7 @@ public class TileGamePlugin extends Plugin
             int overwrite = JOptionPane.showConfirmDialog(
                     null,
                     "A level named '" + groupName + "' already exists and is different. Overwrite it?",
-                    "Overwrite Tile Game Level?",
+                    "Overwrite Tile Racer Level?",
                     JOptionPane.YES_NO_OPTION,
                     JOptionPane.WARNING_MESSAGE
             );
@@ -533,7 +527,7 @@ public class TileGamePlugin extends Plugin
     {
         if (onlineFriends.isEmpty())
         {
-            JOptionPane.showMessageDialog(parent, "No online friends found.", "Tile Game Multiplayer", JOptionPane.INFORMATION_MESSAGE);
+            JOptionPane.showMessageDialog(parent, "No online friends found.", "Tile Racer Multiplayer", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
 
@@ -556,7 +550,7 @@ public class TileGamePlugin extends Plugin
         content.add(levelSelector, BorderLayout.SOUTH);
         content.setPreferredSize(new Dimension(320, 280));
 
-        int result = JOptionPane.showConfirmDialog(parent, content, "Tile Game Multiplayer", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        int result = JOptionPane.showConfirmDialog(parent, content, "Tile Racer Multiplayer", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (result != JOptionPane.OK_OPTION)
         {
             return;
@@ -590,7 +584,7 @@ public class TileGamePlugin extends Plugin
 
         String levelName = normalizeGroupName(invite.levelName == null ? invite.level.name : invite.levelName);
         String message = "Host: " + safeCreator(invite.host) + "\nLevel: " + levelName;
-        int result = JOptionPane.showConfirmDialog(parent, message, "Tile Game Invite Pending", JOptionPane.YES_NO_OPTION, JOptionPane.PLAIN_MESSAGE);
+        int result = JOptionPane.showConfirmDialog(parent, message, "Tile Racer Invite Pending", JOptionPane.YES_NO_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (result != JOptionPane.YES_OPTION)
         {
             declineMultiplayerInvite(invite);
@@ -602,7 +596,7 @@ public class TileGamePlugin extends Plugin
             int overwrite = JOptionPane.showConfirmDialog(
                     parent,
                     "A level named '" + levelName + "' already exists. Accepting this invite will overwrite it.",
-                    "Overwrite Tile Game Level?",
+                    "Overwrite Tile Racer Level?",
                     JOptionPane.YES_NO_OPTION,
                     JOptionPane.WARNING_MESSAGE
             );
@@ -730,7 +724,7 @@ public class TileGamePlugin extends Plugin
         message.level = createMultiplayerLevelSnapshot(groupName);
         sendMultiplayerMessage(message);
         updatePanel();
-        showOverhead("Sent Tile Game multiplayer invite.");
+        showOverhead("Sent Tile Racer multiplayer invite.");
     }
 
     private void acceptMultiplayerInvite(TileGameMultiplayerMessage invite)
@@ -764,7 +758,7 @@ public class TileGamePlugin extends Plugin
         sendMultiplayerMessage(message);
         updatePanel();
         updatePanelLists();
-        showOverhead("Joined " + safeCreator(invite.host) + "'s Tile Game lobby.");
+        showOverhead("Joined " + safeCreator(invite.host) + "'s Tile Racer lobby.");
     }
 
     private void declineMultiplayerInvite(TileGameMultiplayerMessage invite)
@@ -790,7 +784,7 @@ public class TileGamePlugin extends Plugin
     {
         if (multiplayerClient == null)
         {
-            showHelpOverhead("Tile Game multiplayer is not ready yet.");
+            showHelpOverhead("Tile Racer multiplayer is not ready yet.");
             return;
         }
 
@@ -863,10 +857,10 @@ public class TileGamePlugin extends Plugin
                     pendingMultiplayerInvites.removeIf(existing -> message.roomId.equals(existing.roomId));
                     updatePanel();
                 }
-                say(message.error == null ? "Tile Game multiplayer server error." : message.error);
+                say(message.error == null ? "Tile Racer multiplayer server error." : message.error);
                 break;
             case "invite_sent":
-                say("Tile Game invite sent. Delivered: " + message.deliveredPlayers + ", queued: " + message.queuedPlayers + ".");
+                say("Tile Racer invite sent. Delivered: " + message.deliveredPlayers + ", queued: " + message.queuedPlayers + ".");
                 break;
             default:
                 break;
@@ -883,7 +877,7 @@ public class TileGamePlugin extends Plugin
         pendingMultiplayerInvites.removeIf(existing -> message.roomId.equals(existing.roomId));
         pendingMultiplayerInvites.add(message);
         updatePanel();
-        showOverhead("Tile Game invite pending from " + safeCreator(message.host) + ".");
+        showOverhead("Tile Racer invite pending from " + safeCreator(message.host) + ".");
     }
 
     private void handleMultiplayerPlayerJoined(TileGameMultiplayerMessage message)
@@ -903,7 +897,7 @@ public class TileGamePlugin extends Plugin
             multiplayerPlayers.add(message.player);
             if (multiplayerHost)
             {
-                showOverhead(message.player + " joined the Tile Game lobby.");
+                showOverhead(message.player + " joined the Tile Racer lobby.");
             }
         }
         updatePanel();
@@ -913,7 +907,7 @@ public class TileGamePlugin extends Plugin
     {
         if (multiplayerHost && multiplayerRoomId.equals(message.roomId) && message.player != null)
         {
-            showOverhead(message.player + " declined the Tile Game invite.");
+            showOverhead(message.player + " declined the Tile Racer invite.");
         }
     }
 
@@ -943,7 +937,7 @@ public class TileGamePlugin extends Plugin
         updatePanel();
         if (message.player != null)
         {
-            showOverhead(message.player + " left the Tile Game lobby.");
+            showOverhead(message.player + " left the Tile Racer lobby.");
         }
     }
 
@@ -1175,7 +1169,7 @@ public class TileGamePlugin extends Plugin
         multiplayerParticipantColoredTiles.clear();
         multiplayerSequenceSharedMode = true;
         updatePanel();
-        showOverhead("Tile Game lobby closed.");
+        showOverhead("Tile Racer lobby closed.");
     }
 
     void closeMultiplayerLobby()
@@ -3742,7 +3736,7 @@ public class TileGamePlugin extends Plugin
                 client.setGameState(GameState.LOADING);
             }
 
-            addTileMarkDiagnosticMessage("Tile Game hardSceneReset: " + reason);
+            addTileMarkDiagnosticMessage("Tile Racer hardSceneReset: " + reason);
         });
     }
 
@@ -3807,7 +3801,7 @@ public class TileGamePlugin extends Plugin
         final String HELP_TEXT =
                 "INTRODUCTION\n" +
                         "\n" +
-                        "TileRacer is a plugin where you are challenged with coloring all the tiles in various configurations as fast as you can by stepping on them.\n" +
+                        "Tile Racer is a plugin where you are challenged with coloring all the tiles in various configurations as fast as you can by stepping on them.\n" +
                         "There are many mechanics and modifiers that make this more difficult than it sounds. You can play by yourself or compete against friends in real time.\n" +
                         "Anyone can create and share new configurations, and your client tracks your highscores as you improve.\n" +
                         "\n" +
@@ -3939,7 +3933,7 @@ public class TileGamePlugin extends Plugin
             scrollPane.setPreferredSize(new Dimension(520, 360));
             panel.add(scrollPane, java.awt.BorderLayout.CENTER);
 
-            JOptionPane.showMessageDialog(null, panel, "Tile Game: How to Play", JOptionPane.PLAIN_MESSAGE);
+            JOptionPane.showMessageDialog(null, panel, "Tile Racer: How to Play", JOptionPane.PLAIN_MESSAGE);
         });
     }
 
@@ -4339,7 +4333,7 @@ public class TileGamePlugin extends Plugin
             }
             catch (IllegalArgumentException ex)
             {
-                say("Tile Game multiplayer ignored an unknown tile modifier: " + tile.modifier);
+                say("Tile Racer multiplayer ignored an unknown tile modifier: " + tile.modifier);
             }
         }
 
@@ -4410,7 +4404,7 @@ public class TileGamePlugin extends Plugin
             Object selected = JOptionPane.showInputDialog(
                     null,
                     "Choose the level to export:",
-                    "Export Tile Game Level",
+                    "Export Tile Racer Level",
                     JOptionPane.PLAIN_MESSAGE,
                     null,
                     groupNames.toArray(),
@@ -4461,7 +4455,7 @@ public class TileGamePlugin extends Plugin
         }
         catch (JsonParseException ex)
         {
-            say("Tile Game saved data could not be loaded.");
+            say("Tile Racer saved data could not be loaded.");
             return;
         }
 

@@ -1,6 +1,6 @@
 package com;
 
-import com.tilegame.TileGamePlugin;
+import com.tileracer.TileGamePlugin;
 import net.runelite.client.RuneLite;
 import net.runelite.client.externalplugins.ExternalPluginManager;
 

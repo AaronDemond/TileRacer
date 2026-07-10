@@ -1,4 +1,4 @@
-package com.tilegame;
+package com.tileracer;
 
 import com.google.gson.Gson;
 import java.net.URI;
@@ -37,7 +37,7 @@ final class TileGameMultiplayerClient implements WebSocket.Listener
     {
         if (playerName == null || playerName.trim().isEmpty())
         {
-            errorHandler.accept("Log in before using Tile Game multiplayer.");
+            errorHandler.accept("Log in before using Tile Racer multiplayer.");
             return;
         }
 
@@ -45,7 +45,7 @@ final class TileGameMultiplayerClient implements WebSocket.Listener
                 .thenAccept(socket -> socket.sendText(gson.toJson(message), true))
                 .exceptionally(throwable ->
                 {
-                    errorHandler.accept("Tile Game multiplayer could not send because the websocket is not connected.");
+                    errorHandler.accept("Tile Racer multiplayer could not send because the websocket is not connected.");
                     return null;
                 });
     }
@@ -74,7 +74,7 @@ final class TileGameMultiplayerClient implements WebSocket.Listener
         registeredPlayer = "";
         if (socket != null)
         {
-            socket.sendClose(WebSocket.NORMAL_CLOSURE, "Tile Game plugin stopped");
+            socket.sendClose(WebSocket.NORMAL_CLOSURE, "Tile Racer plugin stopped");
         }
     }
 
@@ -103,7 +103,7 @@ final class TileGameMultiplayerClient implements WebSocket.Listener
                 {
                     if (throwable != null)
                     {
-                        errorHandler.accept("Tile Game multiplayer could not connect to " + serverUri + ".");
+                        errorHandler.accept("Tile Racer multiplayer could not connect to " + serverUri + ".");
                         connecting = null;
                     }
                 });
@@ -140,7 +140,7 @@ final class TileGameMultiplayerClient implements WebSocket.Listener
             }
             catch (RuntimeException ex)
             {
-                errorHandler.accept("Tile Game multiplayer received invalid JSON.");
+                errorHandler.accept("Tile Racer multiplayer received invalid JSON.");
             }
         }
 
@@ -161,6 +161,6 @@ final class TileGameMultiplayerClient implements WebSocket.Listener
     {
         this.webSocket = null;
         this.connecting = null;
-        errorHandler.accept("Tile Game multiplayer websocket error: " + error.getMessage());
+        errorHandler.accept("Tile Racer multiplayer websocket error: " + error.getMessage());
     }
 }

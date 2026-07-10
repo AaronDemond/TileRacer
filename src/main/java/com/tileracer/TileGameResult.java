@@ -1,4 +1,4 @@
-package com.tilegame;
+package com.tileracer;
 
 final class TileGameResult
 {

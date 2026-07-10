@@ -1,4 +1,4 @@
-package com.tilegame;
+package com.tileracer;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -261,7 +261,7 @@ class TileGamePanel extends PluginPanel
             refreshScores.run();
 
             JOptionPane optionPane = new JOptionPane(panel, JOptionPane.PLAIN_MESSAGE, JOptionPane.DEFAULT_OPTION);
-            JDialog dialog = optionPane.createDialog(null, "Tile Game Highscores");
+            JDialog dialog = optionPane.createDialog(null, "Tile Racer Highscores");
             dialog.setPreferredSize(new Dimension(780, 360));
             dialog.pack();
             dialog.setVisible(true);
@@ -663,7 +663,7 @@ class TileGamePanel extends PluginPanel
             return;
         }
 
-        String name = JOptionPane.showInputDialog(this, "Name this level:", "Save Tile Game Level", JOptionPane.PLAIN_MESSAGE);
+        String name = JOptionPane.showInputDialog(this, "Name this level:", "Save Tile Racer Level", JOptionPane.PLAIN_MESSAGE);
         if (name != null && !name.trim().isEmpty())
         {
             plugin.saveSelectedLevel(name);
