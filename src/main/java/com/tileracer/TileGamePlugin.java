@@ -201,7 +201,9 @@ public class TileGamePlugin extends Plugin
     private NavigationButton navButton;
     private boolean paintMode = false;
     private final List<TileGameMultiplayerMessage> pendingMultiplayerInvites = new CopyOnWriteArrayList<>();
+    private final Map<String, TileGameMultiplayerMessage> acceptedMultiplayerInvites = new ConcurrentHashMap<>();
     private final Set<String> multiplayerPlayers = ConcurrentHashMap.newKeySet();
+    private boolean soloReplayAvailable = false;
     private volatile String multiplayerRoomId = "";
     private volatile String multiplayerLevelName = "";
     private volatile boolean multiplayerHost = false;
@@ -301,7 +303,9 @@ public class TileGamePlugin extends Plugin
                 activeModifierTool = null;
         resetRunState();
         pendingMultiplayerInvites.clear();
+        acceptedMultiplayerInvites.clear();
         multiplayerPlayers.clear();
+        soloReplayAvailable = false;
         multiplayerRoomId = "";
         multiplayerLevelName = "";
         multiplayerHost = false;
@@ -622,6 +626,11 @@ public class TileGamePlugin extends Plugin
         return new ArrayList<>(pendingMultiplayerInvites);
     }
 
+    int getGameTickCount()
+    {
+        return client.getTickCount();
+    }
+
     boolean canStartMultiplayerGame()
     {
         // Require the host plus at least one other participant before allowing start
@@ -674,6 +683,7 @@ public class TileGamePlugin extends Plugin
             message.level = createMultiplayerLevelSnapshot(multiplayerLevelName);
             setMultiplayerModifierSnapshot(message.level);
             clearMultiplayerSummary();
+            soloReplayAvailable = false;
             sendMultiplayerMessage(message);
             multiplayerActive = true;
             playGroup(multiplayerLevelName);
@@ -718,9 +728,11 @@ public class TileGamePlugin extends Plugin
         clearMultiplayerSummary();
         setMultiplayerModifierSnapshot(pendingSequenceMode, pendingAddDisablers, pendingDangerTiles, pendingDirectionalTiles, pendingHardMode);
         multiplayerPlayers.clear();
+        acceptedMultiplayerInvites.clear();
         multiplayerParticipantColoredTiles.clear();
         multiplayerParticipantPositions.clear();
         multiplayerSequenceSharedMode = true;
+        soloReplayAvailable = false;
         multiplayerPlayers.add(currentPlayerName());
 
         TileGameMultiplayerMessage message = new TileGameMultiplayerMessage();
@@ -742,22 +754,14 @@ public class TileGamePlugin extends Plugin
             return;
         }
 
-        importMultiplayerLevel(invite.level);
-        pendingMultiplayerInvites.removeIf(existing -> invite.roomId.equals(existing.roomId));
-        multiplayerRoomId = invite.roomId;
-        multiplayerLevelName = normalizeGroupName(invite.levelName == null ? invite.level.name : invite.levelName);
-        multiplayerHost = false;
-        multiplayerActive = false;
-        clearMultiplayerSummary();
-        setMultiplayerModifierSnapshot(invite.level);
-        multiplayerParticipantColoredTiles.clear();
-        multiplayerSequenceSharedMode = true;
-        multiplayerPlayers.clear();
-        if (invite.host != null)
+        if (!multiplayerRoomId.isEmpty() && !multiplayerRoomId.equals(invite.roomId))
         {
-            multiplayerPlayers.add(invite.host);
+            leaveMultiplayerLobby();
         }
-        multiplayerPlayers.add(currentPlayerName());
+
+        pendingMultiplayerInvites.removeIf(existing -> invite.roomId.equals(existing.roomId));
+        acceptedMultiplayerInvites.put(invite.roomId, invite);
+        soloReplayAvailable = false;
 
         TileGameMultiplayerMessage message = new TileGameMultiplayerMessage();
         message.type = "join";
@@ -765,8 +769,6 @@ public class TileGamePlugin extends Plugin
         message.player = currentPlayerName();
         sendMultiplayerMessage(message);
         updatePanel();
-        updatePanelLists();
-        showOverhead("Joined " + safeCreator(invite.host) + "'s Tile Racer lobby.");
     }
 
     private void declineMultiplayerInvite(TileGameMultiplayerMessage invite)
@@ -827,7 +829,7 @@ public class TileGamePlugin extends Plugin
                 handleMultiplayerInvite(message);
                 break;
             case "player_joined":
-                handleMultiplayerPlayerJoined(message);
+                clientThread.invokeLater(() -> handleMultiplayerPlayerJoined(message));
                 break;
             case "player_declined":
                 handleMultiplayerPlayerDeclined(message);
@@ -860,12 +862,7 @@ public class TileGamePlugin extends Plugin
                 clientThread.invokeLater(() -> handleMultiplayerLobbyClosed(message));
                 break;
             case "error":
-                if (message.roomId != null)
-                {
-                    pendingMultiplayerInvites.removeIf(existing -> message.roomId.equals(existing.roomId));
-                    updatePanel();
-                }
-                say(message.error == null ? "Tile Racer multiplayer server error." : message.error);
+                clientThread.invokeLater(() -> handleMultiplayerError(message));
                 break;
             case "invite_sent":
                 say("Tile Racer invite sent. Delivered: " + message.deliveredPlayers + ", queued: " + message.queuedPlayers + ".");
@@ -890,6 +887,13 @@ public class TileGamePlugin extends Plugin
 
     private void handleMultiplayerPlayerJoined(TileGameMultiplayerMessage message)
     {
+        TileGameMultiplayerMessage acceptedInvite = message.roomId == null ? null : acceptedMultiplayerInvites.get(message.roomId);
+        if (acceptedInvite != null && joinedPlayerIsCurrentPlayer(message))
+        {
+            completeAcceptedMultiplayerInvite(acceptedInvite, message);
+            return;
+        }
+
         if (!multiplayerRoomId.equals(message.roomId))
         {
             return;
@@ -911,12 +915,81 @@ public class TileGamePlugin extends Plugin
         updatePanel();
     }
 
+    private boolean joinedPlayerIsCurrentPlayer(TileGameMultiplayerMessage message)
+    {
+        String currentName = currentPlayerName();
+        if (message.players != null)
+        {
+            for (String player : message.players)
+            {
+                if (normalizeName(currentName).equals(normalizeName(player)))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return normalizeName(currentName).equals(normalizeName(message.player));
+    }
+
+    private void completeAcceptedMultiplayerInvite(TileGameMultiplayerMessage invite, TileGameMultiplayerMessage joinMessage)
+    {
+        acceptedMultiplayerInvites.remove(invite.roomId);
+        importMultiplayerLevel(invite.level);
+        multiplayerRoomId = invite.roomId;
+        multiplayerLevelName = normalizeGroupName(invite.levelName == null ? invite.level.name : invite.levelName);
+        multiplayerHost = false;
+        multiplayerActive = false;
+        soloReplayAvailable = false;
+        clearMultiplayerSummary();
+        setMultiplayerModifierSnapshot(invite.level);
+        multiplayerParticipantColoredTiles.clear();
+        multiplayerSequenceSharedMode = true;
+        multiplayerPlayers.clear();
+        if (joinMessage.players != null)
+        {
+            multiplayerPlayers.addAll(joinMessage.players);
+        }
+        else
+        {
+            if (invite.host != null)
+            {
+                multiplayerPlayers.add(invite.host);
+            }
+            multiplayerPlayers.add(currentPlayerName());
+        }
+
+        updatePanel();
+        updatePanelLists();
+        showOverhead("Joined " + safeCreator(invite.host) + "'s Tile Racer lobby.");
+    }
+
     private void handleMultiplayerPlayerDeclined(TileGameMultiplayerMessage message)
     {
         if (multiplayerHost && multiplayerRoomId.equals(message.roomId) && message.player != null)
         {
             showOverhead(message.player + " declined the Tile Racer invite.");
         }
+    }
+
+    private void handleMultiplayerError(TileGameMultiplayerMessage message)
+    {
+        boolean removedInvite = false;
+        boolean removedAcceptedInvite = false;
+        if (message.roomId != null)
+        {
+            removedInvite = pendingMultiplayerInvites.removeIf(existing -> message.roomId.equals(existing.roomId));
+            removedAcceptedInvite = acceptedMultiplayerInvites.remove(message.roomId) != null;
+            updatePanel();
+        }
+
+        if (removedInvite || removedAcceptedInvite)
+        {
+            showMultiplayerUnavailablePopup();
+            return;
+        }
+
+        say(message.error == null ? "Tile Racer multiplayer server error." : message.error);
     }
 
     private void handleMultiplayerPlayerLeft(TileGameMultiplayerMessage message)
@@ -1147,6 +1220,7 @@ public class TileGamePlugin extends Plugin
         multiplayerLevelName = "";
         multiplayerHost = false;
         clearMultiplayerModifierSnapshot();
+        acceptedMultiplayerInvites.clear();
         multiplayerPlayers.clear();
         multiplayerParticipantColoredTiles.clear();
         multiplayerSequenceSharedMode = true;
@@ -1157,14 +1231,21 @@ public class TileGamePlugin extends Plugin
 
     private void handleMultiplayerLobbyClosed(TileGameMultiplayerMessage message)
     {
+        boolean removedPendingInvite = false;
+        boolean removedAcceptedInvite = false;
         if (message.roomId != null)
         {
-            pendingMultiplayerInvites.removeIf(existing -> message.roomId.equals(existing.roomId));
+            removedPendingInvite = pendingMultiplayerInvites.removeIf(existing -> message.roomId.equals(existing.roomId));
+            removedAcceptedInvite = acceptedMultiplayerInvites.remove(message.roomId) != null;
         }
 
         if (!multiplayerRoomId.equals(message.roomId))
         {
             updatePanel();
+            if (removedPendingInvite || removedAcceptedInvite)
+            {
+                showMultiplayerUnavailablePopup();
+            }
             return;
         }
 
@@ -1173,11 +1254,22 @@ public class TileGamePlugin extends Plugin
         multiplayerLevelName = "";
         multiplayerHost = false;
         clearMultiplayerModifierSnapshot();
+        acceptedMultiplayerInvites.clear();
         multiplayerPlayers.clear();
         multiplayerParticipantColoredTiles.clear();
         multiplayerSequenceSharedMode = true;
         updatePanel();
         showOverhead("Tile Racer lobby closed.");
+    }
+
+    private void showMultiplayerUnavailablePopup()
+    {
+        SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(
+                panel,
+                "This multiplayer match is no longer available.",
+                "Tile Racer Multiplayer",
+                JOptionPane.INFORMATION_MESSAGE
+        ));
     }
 
     void closeMultiplayerLobby()
@@ -1202,6 +1294,7 @@ public class TileGamePlugin extends Plugin
         multiplayerHost = false;
         multiplayerActive = false;
         clearMultiplayerModifierSnapshot();
+        acceptedMultiplayerInvites.clear();
         multiplayerPlayers.clear();
         multiplayerParticipantColoredTiles.clear();
         multiplayerSequenceSharedMode = true;
@@ -1256,6 +1349,16 @@ public class TileGamePlugin extends Plugin
     void setLevelsCollapsed(boolean collapsed)
     {
         configManager.setConfiguration(CONFIG_GROUP, "levelsCollapsed", collapsed);
+    }
+
+    boolean shouldSkipPlayConfirmation()
+    {
+        return config.skipPlayConfirmation();
+    }
+
+    void setSkipPlayConfirmation(boolean skip)
+    {
+        configManager.setConfiguration(CONFIG_GROUP, "skipPlayConfirmation", skip);
     }
 
     boolean isMultiplayerActive()
@@ -1384,6 +1487,7 @@ public class TileGamePlugin extends Plugin
             return;
         }
 
+       soloReplayAvailable = multiplayerRoomId.isEmpty();
        Set<WorldPoint> tilesForRun = new HashSet<>(groupTiles);
        clientThread.invokeLater(() ->
         {
@@ -2350,6 +2454,10 @@ public class TileGamePlugin extends Plugin
             processDisableTick();
         }
         processGameTick();
+        if (!pendingMultiplayerInvites.isEmpty())
+        {
+            updatePanel();
+        }
     }
 
     private void registerMultiplayerPlayerIfReady()
@@ -3169,27 +3277,17 @@ public class TileGamePlugin extends Plugin
 
     boolean canUseLevelPanelControls()
     {
-        return rendererReady && !multiplayerActive;
+        return rendererReady && multiplayerRoomId.isEmpty() && !multiplayerActive;
     }
 
     boolean canUsePaintButton()
     {
-        return rendererReady && !multiplayerActive;
+        return rendererReady && multiplayerRoomId.isEmpty() && !multiplayerActive;
     }
 
     boolean canReplayCurrentGame()
     {
-        if (!rendererReady)
-        {
-            return false;
-        }
-
-        if (multiplayerRoomId.isEmpty())
-        {
-            return true;
-        }
-
-        return multiplayerHost && multiplayerActive;
+        return rendererReady && soloReplayAvailable;
     }
 
     // Participant-side: ask the host to clear the disablers after stepping on the reset tile

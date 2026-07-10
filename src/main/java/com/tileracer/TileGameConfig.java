@@ -79,4 +79,15 @@ public interface TileGameConfig extends Config
 	{
 		return false;
 	}
+
+	@ConfigItem(
+		keyName = "skipPlayConfirmation",
+		name = "Skip Play Confirmation",
+		description = "Do not show the play confirmation message again.",
+		position = 6
+	)
+	default boolean skipPlayConfirmation()
+	{
+		return false;
+	}
 }

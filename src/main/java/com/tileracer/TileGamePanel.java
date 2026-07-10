@@ -47,12 +47,18 @@ class TileGamePanel extends PluginPanel
     private static final Color GOLD = new Color(255, 208, 79);
     private static final Color TEXT_COLOR = Color.WHITE;
     private static final Color MUTED_TEXT_COLOR = new Color(202, 190, 245);
+    private static final Color INVITE_FLASH_PRIMARY = new Color(255, 208, 79);
+    private static final Color INVITE_FLASH_SECONDARY = new Color(86, 226, 255);
 
     private final TileGamePlugin plugin;
     private final JLabel modeValue = valueLabel();
     private final JLabel groupValue = valueLabel();
     private final JLabel winnerValue = valueLabel();
     private final JLabel timeValue = valueLabel();
+    private CollapsibleCard controlsCard;
+    private CollapsibleCard gameStateCard;
+    private CollapsibleCard multiplayerCard;
+    private CollapsibleCard levelsCard;
     private final JPanel levelsPanel = new JPanel();
     private final JPanel levelCreationPanel = new JPanel();
     private final JPanel multiplayerPanel = new JPanel();
@@ -88,34 +94,38 @@ class TileGamePanel extends PluginPanel
         levelCreationPanel.setBackground(SECTION_BACKGROUND);
         multiplayerPanel.setBackground(SECTION_BACKGROUND);
 
-        addFullWidth(content, card(
+        controlsCard = card(
                 "Controls",
                 actionPanel(),
                 null,
                 plugin.isControlsCollapsed(),
                 plugin::setControlsCollapsed
-        ), 0);
-        addFullWidth(content, card(
+        );
+        addFullWidth(content, controlsCard, 0);
+        gameStateCard = card(
                 "Game State",
                 currentGamePanel(),
                 null,
                 plugin.isGameStateCollapsed(),
                 plugin::setGameStateCollapsed
-        ), 1);
-        addFullWidth(content, card(
+        );
+        addFullWidth(content, gameStateCard, 1);
+        multiplayerCard = card(
                 "Multiplayer",
                 multiplayerStatusPanel(),
                 null,
                 plugin.isMultiplayerCollapsed(),
                 plugin::setMultiplayerCollapsed
-        ), 2);
-        addFullWidth(content, card(
+        );
+        addFullWidth(content, multiplayerCard, 2);
+        levelsCard = card(
                 "Levels",
                 levelsCardPanel(),
                 null,
                 plugin.isLevelsCollapsed(),
                 plugin::setLevelsCollapsed
-        ), 3);
+        );
+        addFullWidth(content, levelsCard, 3);
 
         add(content, BorderLayout.CENTER);
         refresh();
@@ -167,7 +177,7 @@ class TileGamePanel extends PluginPanel
             }
             if (restartButton != null)
             {
-                restartButton.setEnabled(plugin.canReplayCurrentGame());
+                restartButton.setEnabled(plugin.canReplayCurrentGame() && !plugin.isInMultiplayerLobby());
             }
             if (stopButton != null)
             {
@@ -175,6 +185,7 @@ class TileGamePanel extends PluginPanel
             }
             updateLevelActionButtons();
             updateMultiplayerControls();
+            applyLobbyRestrictions();
             if (!plugin.isRendererReady())
             {
                 setInteractiveComponentsEnabled(this, false);
@@ -405,7 +416,7 @@ class TileGamePanel extends PluginPanel
 
         centerPanel.add(modRow, BorderLayout.SOUTH);
         panel.add(centerPanel, BorderLayout.CENTER);
-        panel.add(levelCreationPanel, BorderLayout.SOUTH);
+        panel.add(levelCreationPanel, BorderLayout.NORTH);
         updateLevelCreationControls();
         return panel;
     }
@@ -501,40 +512,39 @@ class TileGamePanel extends PluginPanel
         multiplayerPanel.add(status);
         multiplayerPanel.add(javax.swing.Box.createVerticalStrut(8));
 
-        if (plugin.isInMultiplayerLobby())
+        if (plugin.isInMultiplayerLobby() && !plugin.isMultiplayerActive())
         {
             String levelName = plugin.getMultiplayerLevelName();
             boolean canPreview = levelName != null && !levelName.isEmpty() && plugin.getGroups().containsKey(levelName);
+
+            int actionCount = plugin.isMultiplayerHost() ? 3 : 2;
+            JPanel lobbyActions = new JPanel(new GridLayout(1, actionCount, 5, 0));
+            lobbyActions.setBackground(SECTION_BACKGROUND);
+            lobbyActions.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+            if (plugin.isMultiplayerHost() && plugin.canStartMultiplayerGame())
+            {
+                lobbyActions.add(iconButton("Start", "Start the hosted multiplayer game", plugin::startMultiplayerGame));
+            }
+            else if (plugin.isMultiplayerHost())
+            {
+                JButton startButton = actionButton("Start");
+                startButton.setEnabled(false);
+                lobbyActions.add(startButton);
+            }
+
+            JButton closeOrLeaveButton = plugin.isMultiplayerHost()
+                    ? iconButton("close", "Close the hosted multiplayer lobby for everyone", plugin::closeMultiplayerLobby)
+                    : iconButton("leave", "Leave the current multiplayer lobby", plugin::leaveMultiplayerLobby);
+            lobbyActions.add(closeOrLeaveButton);
+
             JButton previewButton = iconButton(
                     plugin.isViewingGroup(levelName) ? "Hide Preview" : "Preview",
                     "Show or hide the multiplayer level preview",
                     () -> plugin.toggleViewGroup(levelName)
             );
             previewButton.setEnabled(canPreview);
-            previewButton.setAlignmentX(Component.LEFT_ALIGNMENT);
-            multiplayerPanel.add(previewButton);
-            multiplayerPanel.add(javax.swing.Box.createVerticalStrut(8));
-        }
-
-        if (plugin.isInMultiplayerLobby() && !plugin.isMultiplayerActive())
-        {
-            JPanel lobbyActions = new JPanel(new GridLayout(1, plugin.isMultiplayerHost() ? 2 : 1, 5, 0));
-            lobbyActions.setBackground(SECTION_BACKGROUND);
-            lobbyActions.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-            if (plugin.canStartMultiplayerGame())
-            {
-                lobbyActions.add(iconButton("Start Multiplayer", "Start the hosted multiplayer game", plugin::startMultiplayerGame));
-            }
-
-            if (plugin.isMultiplayerHost())
-            {
-                lobbyActions.add(iconButton("Close Lobby", "Close the hosted multiplayer lobby for everyone", plugin::closeMultiplayerLobby));
-            }
-            else
-            {
-                lobbyActions.add(iconButton("Leave Lobby", "Leave the current multiplayer lobby", plugin::leaveMultiplayerLobby));
-            }
+            lobbyActions.add(previewButton);
 
             multiplayerPanel.add(lobbyActions);
             multiplayerPanel.add(javax.swing.Box.createVerticalStrut(8));
@@ -544,9 +554,11 @@ class TileGamePanel extends PluginPanel
         if (!invites.isEmpty())
         {
             JPanel invitePanel = new JPanel();
-            invitePanel.setLayout(new BoxLayout(invitePanel, BoxLayout.Y_AXIS));
+            invitePanel.setLayout(new GridLayout(0, 1, 0, 6));
             invitePanel.setBackground(SECTION_BACKGROUND);
             invitePanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+            invitePanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+            Color inviteColor = plugin.getGameTickCount() % 2 == 0 ? INVITE_FLASH_PRIMARY : INVITE_FLASH_SECONDARY;
 
             for (int i = 0; i < invites.size(); i++)
             {
@@ -557,12 +569,14 @@ class TileGamePanel extends PluginPanel
                         "View invite from " + host,
                         () -> plugin.showPendingMultiplayerInvite(invite, this)
                 );
+                inviteButton.setBackground(inviteColor);
+                inviteButton.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(inviteColor == INVITE_FLASH_PRIMARY ? CYAN : GOLD, 2),
+                        BorderFactory.createEmptyBorder(5, 4, 5, 4)
+                ));
                 inviteButton.setAlignmentX(Component.LEFT_ALIGNMENT);
+                inviteButton.setMaximumSize(new Dimension(Integer.MAX_VALUE, inviteButton.getPreferredSize().height));
                 invitePanel.add(inviteButton);
-                if (i < invites.size() - 1)
-                {
-                    invitePanel.add(javax.swing.Box.createVerticalStrut(6));
-                }
             }
 
             multiplayerPanel.add(invitePanel);
@@ -570,6 +584,35 @@ class TileGamePanel extends PluginPanel
 
         multiplayerPanel.revalidate();
         multiplayerPanel.repaint();
+    }
+
+    private void applyLobbyRestrictions()
+    {
+        if (controlsCard != null)
+        {
+            setInteractiveComponentsEnabled(controlsCard, !plugin.isInMultiplayerLobby());
+        }
+
+        if (levelsCard != null)
+        {
+            setInteractiveComponentsEnabled(levelsCard, !plugin.isInMultiplayerLobby());
+        }
+
+        if (gameStateCard != null)
+        {
+            boolean allowGameStateControls = !plugin.isInMultiplayerLobby() || plugin.isMultiplayerHost();
+            setInteractiveComponentsEnabled(gameStateCard, allowGameStateControls);
+        }
+
+        if (restartButton != null)
+        {
+            restartButton.setEnabled(!plugin.isInMultiplayerLobby() && plugin.canReplayCurrentGame());
+        }
+
+        if (stopButton != null && plugin.isInMultiplayerLobby())
+        {
+            stopButton.setEnabled(true);
+        }
     }
 
     private JButton actionButton(String text)
@@ -616,31 +659,37 @@ class TileGamePanel extends PluginPanel
 
         if (plugin.getMode() == TileGameMode.CHOOSE || plugin.getMode() == TileGameMode.EDIT)
         {
-            JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+            JPanel actionRow = new JPanel(new GridLayout(1, 3, 5, 0));
             actionRow.setBackground(SECTION_BACKGROUND);
             JButton saveButton = iconButton("💾 Save", "Save selected tiles as a level", this::saveCurrentSelection);
-            JButton trashButton = iconButton("🗑 Delete", "Trash current level selection", plugin::trashCurrentLevelSelection);
+            JButton bonusButton = modifierToolButton("★ Bonus", TileModifier.BONUS, plugin.getActiveModifierTool());
+            JButton cancelButton = iconButton("✕ Cancel", "Cancel current level selection", plugin::trashCurrentLevelSelection);
             boolean controlsEnabled = plugin.canUseLevelPanelControls();
             saveButton.setEnabled(controlsEnabled);
-            trashButton.setEnabled(controlsEnabled);
-            actionRow.add(saveButton);
-            actionRow.add(trashButton);
-
-            TileModifier activeTool = plugin.getActiveModifierTool();
-            JPanel modifierRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
-            modifierRow.setBackground(SECTION_BACKGROUND);
-            JButton bonusButton = modifierToolButton("★ Bonus", TileModifier.BONUS, activeTool);
             bonusButton.setEnabled(controlsEnabled);
-            modifierRow.add(bonusButton);
-
+            cancelButton.setEnabled(controlsEnabled);
+            actionRow.add(saveButton);
+            actionRow.add(bonusButton);
+            actionRow.add(cancelButton);
             levelCreationPanel.add(actionRow);
-            levelCreationPanel.add(modifierRow);
         }
         else
         {
-            JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+            JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
             actionRow.setBackground(SECTION_BACKGROUND);
-            JButton newButton = iconButton("+ New", "Create a new level", plugin::startNewLevelSelection);
+            JButton newButton = actionButton("New");
+            JButton widthReferenceButton = actionButton("Start Multiplayer");
+            Dimension referenceSize = widthReferenceButton.getPreferredSize();
+            Dimension newButtonSize = new Dimension(referenceSize.width, newButton.getPreferredSize().height);
+            newButton.setBackground(new Color(72, 220, 121));
+            newButton.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(new Color(31, 140, 63), 2),
+                    BorderFactory.createEmptyBorder(5, 4, 5, 4)
+            ));
+            newButton.setPreferredSize(newButtonSize);
+            newButton.setMinimumSize(newButtonSize);
+            newButton.setMaximumSize(newButtonSize);
+            newButton.addActionListener(event -> plugin.startNewLevelSelection());
             newButton.setEnabled(plugin.canUseLevelPanelControls());
             actionRow.add(newButton);
             levelCreationPanel.add(actionRow);
@@ -698,6 +747,79 @@ class TileGamePanel extends PluginPanel
         }
     }
 
+    private void promptPlayGroup(String groupName)
+    {
+        if (plugin.shouldSkipPlayConfirmation())
+        {
+            plugin.playGroup(groupName);
+            return;
+        }
+
+        JTextArea message = textArea("Are you happy with your modifier settings? They can be toggled to increase difficulty. Look below your list of levels");
+        message.setOpaque(false);
+        message.setMargin(new Insets(0, 0, 0, 0));
+        message.setPreferredSize(new Dimension(360, 72));
+
+        JCheckBox dontShowAgain = new JCheckBox("Don't show this message again");
+        dontShowAgain.setOpaque(false);
+        dontShowAgain.setForeground(TEXT_COLOR);
+
+        JPanel panel = new JPanel(new BorderLayout(0, 10));
+        panel.setBackground(PANEL_BACKGROUND);
+        panel.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+        panel.add(message, BorderLayout.CENTER);
+
+        boolean[] confirmed = {false};
+        JDialog dialog = new JDialog();
+        dialog.setTitle("Play Level");
+        dialog.setModal(true);
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+
+        JButton yesButton = actionButton("Yes");
+        yesButton.addActionListener(event ->
+        {
+            confirmed[0] = true;
+            if (dontShowAgain.isSelected())
+            {
+                plugin.setSkipPlayConfirmation(true);
+            }
+            dialog.dispose();
+        });
+
+        JButton noButton = actionButton("No");
+        noButton.addActionListener(event ->
+        {
+            if (dontShowAgain.isSelected())
+            {
+                plugin.setSkipPlayConfirmation(true);
+            }
+            dialog.dispose();
+        });
+
+        JPanel buttonRow = new JPanel(new GridLayout(1, 2, 8, 0));
+        buttonRow.setOpaque(false);
+        buttonRow.add(yesButton);
+        buttonRow.add(noButton);
+
+        JPanel footer = new JPanel(new BorderLayout(0, 10));
+        footer.setOpaque(false);
+        footer.add(dontShowAgain, BorderLayout.NORTH);
+        footer.add(buttonRow, BorderLayout.SOUTH);
+        panel.add(footer, BorderLayout.SOUTH);
+
+        dialog.setContentPane(panel);
+        dialog.getRootPane().setDefaultButton(yesButton);
+        dialog.pack();
+        dialog.setResizable(false);
+        dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+
+        if (confirmed[0])
+        {
+            plugin.playGroup(groupName);
+        }
+    }
+
     private JPanel levelRow(String groupName)
     {
         JPanel row = new JPanel(new BorderLayout(8, 0));
@@ -720,7 +842,7 @@ class TileGamePanel extends PluginPanel
                 (plugin.isViewingGroup(groupName) ? "Hide " : "View ") + groupName,
                 () -> plugin.toggleViewGroup(groupName)
         );
-        JButton playButton = iconButton("▶", "Play " + groupName, () -> plugin.playGroup(groupName));
+        JButton playButton = iconButton("▶", "Play " + groupName, () -> promptPlayGroup(groupName));
         JButton editButton = iconButton("✎", "Edit " + groupName, () -> plugin.editGroup(groupName));
         JButton deleteButton = iconButton("×", "Delete " + groupName, () -> {
             int res = JOptionPane.showConfirmDialog(TileGamePanel.this,
