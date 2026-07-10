@@ -1,5 +1,6 @@
 package com.tilegame;
-
+import java.awt.image.BufferedImage;
+import net.runelite.client.util.ImageUtil;
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
 import com.google.inject.Provides;
@@ -54,6 +55,7 @@ import net.runelite.api.CollisionData;
 import net.runelite.api.CollisionDataFlag;
 import net.runelite.api.Friend;
 import net.runelite.api.FriendContainer;
+import net.runelite.api.GameState;
 import net.runelite.api.Perspective;
 import net.runelite.api.Player;
 import net.runelite.api.Scene;
@@ -65,10 +67,12 @@ import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.PluginChanged;
 import net.runelite.client.input.MouseAdapter;
 import net.runelite.client.input.MouseManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.plugins.PluginManager;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
@@ -101,6 +105,9 @@ public class TileGamePlugin extends Plugin
     private static final double DISABLER_SPAWN_CHANCE = 0.10;
     private static final int RECENT_SEQUENCE_BATCH_LIMIT = 4;
     private static final URI MULTIPLAYER_SERVER_URI = URI.create("ws://159.203.9.18:8765");
+    private static final String HD_PLUGIN_NAME = "117 HD";
+    static final String RENDERER_REQUIRED_MESSAGE = "GPU or 117 HD plugin must be active";
+    private static final int RENDERER_WARNING_REPEAT_TICKS = 250;
 
     @Inject
     private Client client;
@@ -119,6 +126,9 @@ public class TileGamePlugin extends Plugin
 
     @Inject
     private MouseManager mouseManager;
+
+    @Inject
+    private PluginManager pluginManager;
 
     @Inject
     private ClientToolbar clientToolbar;
@@ -214,6 +224,8 @@ public class TileGamePlugin extends Plugin
     private final Map<String, Set<WorldPoint>> multiplayerParticipantColoredTiles = new HashMap<>();
     private final Map<String, WorldPoint> multiplayerParticipantPositions = new HashMap<>();
     private int lastMultiplayerRegisterAttemptTick = -1000;
+    private boolean rendererReady;
+    private int lastRendererWarningTick = -RENDERER_WARNING_REPEAT_TICKS;
 
     @Provides
     TileGameConfig provideConfig(ConfigManager configManager)
@@ -235,10 +247,12 @@ public class TileGamePlugin extends Plugin
 
         panel = new TileGamePanel(this);
         panel.showGroups(groups);
-
+        refreshRendererState();
+        final BufferedImage icon =
+                ImageUtil.loadImageResource(getClass(), "/com/tileracer/icon.png");
         navButton = NavigationButton.builder()
-                .tooltip("Tile Game")
-                .icon(createPanelIcon())
+                .tooltip("TileRacer")
+                .icon(icon)
                 .priority(6)
                 .panel(panel)
                 .build();
@@ -2261,6 +2275,7 @@ public class TileGamePlugin extends Plugin
                 saveEditedGroup();
                 updatePanel();
                 say("Deselected tile. Selected tiles: " + selectedTiles.size());
+                logTileMarkDiagnostics(clickedTile, false, selectedTiles.size());
             }
             else
             {
@@ -2268,6 +2283,7 @@ public class TileGamePlugin extends Plugin
                 saveEditedGroup();
                 updatePanel();
                 say("Selected tile. Selected tiles: " + selectedTiles.size());
+                logTileMarkDiagnostics(clickedTile, true, selectedTiles.size());
             }
 
             return null;
@@ -2275,8 +2291,15 @@ public class TileGamePlugin extends Plugin
     };
 
     @Subscribe
+    public void onPluginChanged(PluginChanged event)
+    {
+        refreshRendererState();
+    }
+
+    @Subscribe
     public void onGameTick(GameTick event)
     {
+        refreshRendererState();
         registerMultiplayerPlayerIfReady();
         processPaintTick();
         processCountdownTick();
@@ -3104,16 +3127,21 @@ public class TileGamePlugin extends Plugin
 
     boolean canUseLevelPanelControls()
     {
-        return !multiplayerActive;
+        return rendererReady && !multiplayerActive;
     }
 
     boolean canUsePaintButton()
     {
-        return !multiplayerActive;
+        return rendererReady && !multiplayerActive;
     }
 
     boolean canReplayCurrentGame()
     {
+        if (!rendererReady)
+        {
+            return false;
+        }
+
         if (multiplayerRoomId.isEmpty())
         {
             return true;
@@ -3642,6 +3670,80 @@ public class TileGamePlugin extends Plugin
                         false
                 )
         );
+    }
+
+    private void logTileMarkDiagnostics(WorldPoint clickedTile, boolean marked, int selectedTileCount)
+    {
+        clientThread.invokeLater(() ->
+        {
+            WorldView worldView = client.getTopLevelWorldView();
+            Scene scene = worldView == null ? null : worldView.getScene();
+            Object drawCallbacks = client.getDrawCallbacks();
+            boolean instanced = client.isInInstancedRegion()
+                    || (worldView != null && worldView.isInstance())
+                    || (scene != null && scene.isInstance());
+
+            String sceneIdentityHash = scene == null
+                    ? "null"
+                    : String.valueOf(System.identityHashCode(scene));
+            String drawMode = drawCallbacks == null
+                    ? "normal overlay (TileGameOverlay)"
+                    : "custom draw hook (" + drawCallbacks.getClass().getName() + ")";
+
+            addTileMarkDiagnosticMessage(
+                    "Tile mark diagnostics: action=" + (marked ? "MARKED" : "UNMARKED")
+                            + " tile=" + clickedTile
+                            + " selectedCount=" + selectedTileCount
+            );
+            addTileMarkDiagnosticMessage(
+                    "sceneIdentityHash=" + sceneIdentityHash
+                            + " cameraX=" + client.getCameraX()
+                            + " cameraY=" + client.getCameraY()
+                            + " cameraZ=" + client.getCameraZ()
+                            + " cameraPitch=" + client.getCameraPitch()
+                            + " cameraYaw=" + client.getCameraYaw()
+            );
+            addTileMarkDiagnosticMessage(
+                    "viewportWidth=" + client.getViewportWidth()
+                            + " viewportHeight=" + client.getViewportHeight()
+                            + " viewportXOffset=" + client.getViewportXOffset()
+                            + " viewportYOffset=" + client.getViewportYOffset()
+                            + " tileGeometryCacheInvalidated=false"
+                            + " tileGeometryCacheRebuilt=false"
+                            + " geometry=on-demand"
+            );
+            addTileMarkDiagnosticMessage(
+                    "world=" + (instanced ? "instanced area" : "top-level world")
+                            + " activeDrawMode=" + drawMode
+                            + " customDrawHook=" + (drawCallbacks != null)
+            );
+        });
+    }
+
+    private void addTileMarkDiagnosticMessage(String message)
+    {
+        client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null, false);
+    }
+
+    void hardSceneReset(String reason)
+    {
+        clientThread.invokeLater(() ->
+        {
+            Scene scene = client.getScene();
+            if (scene != null)
+            {
+                scene.setMinLevel(0);
+            }
+
+            client.resizeCanvas();
+
+            if (client.getGameState() == GameState.LOGGED_IN)
+            {
+                client.setGameState(GameState.LOADING);
+            }
+
+            addTileMarkDiagnosticMessage("Tile Game hardSceneReset: " + reason);
+        });
     }
 
     private void showHelpOverhead(String message)
@@ -4612,29 +4714,6 @@ public class TileGamePlugin extends Plugin
         return creator == null || creator.trim().isEmpty() ? "unknown" : creator;
     }
 
-    private BufferedImage createPanelIcon()
-    {
-        BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D graphics = image.createGraphics();
-
-        try
-        {
-            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            graphics.setColor(new Color(55, 180, 255));
-            graphics.fillRoundRect(1, 1, 14, 14, 4, 4);
-            graphics.setColor(Color.WHITE);
-            graphics.setStroke(new BasicStroke(2));
-            graphics.drawLine(4, 5, 12, 5);
-            graphics.drawLine(4, 8, 10, 8);
-            graphics.drawLine(4, 11, 12, 11);
-        }
-        finally
-        {
-            graphics.dispose();
-        }
-
-        return image;
-    }
 
     TileGameMode getMode()
     {
@@ -4894,9 +4973,72 @@ public class TileGamePlugin extends Plugin
 
             boolean canEditSequenceMode()
     {
-        // Always allow editing the sequence mode so the checkbox in the Levels card
-        // remains clickable even after stopping a run or when no group is active.
-        return true;
+        return rendererReady;
+    }
+
+    boolean isRendererReady()
+    {
+        return rendererReady;
+    }
+
+    String getRendererUnavailableMessage()
+    {
+        return RENDERER_REQUIRED_MESSAGE;
+    }
+
+    private void refreshRendererState()
+    {
+        boolean ready = client.isGpu() || is117HdPluginActive();
+        if (rendererReady != ready)
+        {
+            rendererReady = ready;
+            if (rendererReady)
+            {
+                lastRendererWarningTick = -RENDERER_WARNING_REPEAT_TICKS;
+            }
+            updatePanel();
+        }
+
+        if (!rendererReady)
+        {
+            maybeShowRendererWarning();
+        }
+    }
+
+    private boolean is117HdPluginActive()
+    {
+        if (pluginManager == null)
+        {
+            return false;
+        }
+
+        for (Plugin plugin : pluginManager.getPlugins())
+        {
+            PluginDescriptor descriptor = plugin.getClass().getAnnotation(PluginDescriptor.class);
+            if (descriptor != null && HD_PLUGIN_NAME.equals(descriptor.name()) && pluginManager.isPluginActive(plugin))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void maybeShowRendererWarning()
+    {
+        if (client.getGameState() != GameState.LOGGED_IN || client.getLocalPlayer() == null)
+        {
+            return;
+        }
+
+        int currentTick = client.getTickCount();
+        if (currentTick - lastRendererWarningTick < RENDERER_WARNING_REPEAT_TICKS)
+        {
+            return;
+        }
+
+        lastRendererWarningTick = currentTick;
+        showOverhead(RENDERER_REQUIRED_MESSAGE);
     }
 
     // Grade/score/miss/revisit tracking removed per configuration

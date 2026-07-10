@@ -1,12 +1,15 @@
 package com.tilegame;
 
+import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Composite;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.Polygon;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.awt.Stroke;
 import java.awt.geom.Area;
@@ -15,7 +18,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import javax.inject.Inject;
+import net.runelite.api.Actor;
 import net.runelite.api.Client;
+import net.runelite.api.Model;
 import net.runelite.api.NPC;
 import net.runelite.api.Perspective;
 import net.runelite.api.Player;
@@ -50,7 +55,12 @@ public class TileGameOverlay extends Overlay
     @Override
     public Dimension render(Graphics2D graphics)
     {
-        List<Area> npcMasks = buildActorMasks();
+        if (!plugin.isRendererReady())
+        {
+            return null;
+        }
+
+        List<Area> npcMasks = buildNpcMasks();
 
         for (WorldPoint worldPoint : plugin.getViewedLevelTiles())
         {
@@ -223,10 +233,11 @@ public class TileGameOverlay extends Overlay
             drawTileBorder(graphics, npcMasks, entry.getValue(), Color.BLUE);
         }
 
+        clearPlayers(graphics);
         return null;
     }
 
-    private List<Area> buildActorMasks()
+    private List<Area> buildNpcMasks()
     {
         List<Area> actorMasks = new ArrayList<>();
         WorldView worldView = client.getTopLevelWorldView();
@@ -250,25 +261,161 @@ public class TileGameOverlay extends Overlay
             }
         }
 
-        // The local player is rendered pixel-perfect above the tiles by the
-        // ABOVE_SCENE render pipeline, so only mask other players' hulls.
-        Player localPlayer = client.getLocalPlayer();
+        return actorMasks;
+    }
+
+    private void clearPlayers(Graphics2D graphics)
+    {
+        WorldView worldView = client.getTopLevelWorldView();
+        if (worldView == null)
+        {
+            return;
+        }
+
         for (Player player : worldView.players())
         {
-            if (player == null || player == localPlayer)
+            clearPlayer(graphics, player);
+        }
+    }
+
+    private void clearPlayer(Graphics2D graphics, Player player)
+    {
+        if (player == null)
+        {
+            return;
+        }
+
+        LocalPoint localLocation = player.getLocalLocation();
+        WorldView worldView = client.getTopLevelWorldView();
+        if (localLocation == null || worldView == null)
+        {
+            return;
+        }
+
+        int localZ = Perspective.getFootprintTileHeight(
+                client,
+                localLocation,
+                worldView.getPlane(),
+                player.getFootprintSize()
+        ) - player.getAnimationHeightOffset();
+        clearActor(graphics, player, localZ);
+    }
+
+    private void clearActor(Graphics2D graphics, Actor actor, int localZ)
+    {
+        if (actor == null)
+        {
+            return;
+        }
+
+        Model model = actor.getModel();
+        LocalPoint localLocation = actor.getLocalLocation();
+        WorldView actorWorldView = actor.getWorldView();
+        if (model == null || localLocation == null || actorWorldView == null)
+        {
+            return;
+        }
+
+        int vertexCount = model.getVerticesCount();
+        if (vertexCount <= 0)
+        {
+            return;
+        }
+
+        float[] x3d = model.getVerticesX();
+        float[] y3d = model.getVerticesY();
+        float[] z3d = model.getVerticesZ();
+        if (x3d == null || y3d == null || z3d == null)
+        {
+            return;
+        }
+
+        int[] x2d = new int[vertexCount];
+        int[] y2d = new int[vertexCount];
+
+        Perspective.modelToCanvas(
+                client,
+                actorWorldView,
+                vertexCount,
+                localLocation.getX(),
+                localLocation.getY(),
+                localZ,
+                actor.getCurrentOrientation(),
+                x3d,
+                z3d,
+                y3d,
+                x2d,
+                y2d
+        );
+
+        int clipX1 = client.getViewportXOffset();
+        int clipY1 = client.getViewportYOffset();
+        int clipX2 = clipX1 + client.getViewportWidth();
+        int clipY2 = clipY1 + client.getViewportHeight();
+
+        boolean anyVisible = false;
+        for (int i = 0; i < vertexCount; i++)
+        {
+            int x = x2d[i];
+            int y = y2d[i];
+            boolean visibleX = x >= clipX1 && x < clipX2;
+            boolean visibleY = y >= clipY1 && y < clipY2;
+            anyVisible |= visibleX && visibleY;
+        }
+
+        if (!anyVisible)
+        {
+            return;
+        }
+
+        int triangleCount = model.getFaceCount();
+        int[] tx = model.getFaceIndices1();
+        int[] ty = model.getFaceIndices2();
+        int[] tz = model.getFaceIndices3();
+        if (triangleCount <= 0 || tx == null || ty == null || tz == null)
+        {
+            return;
+        }
+
+        byte[] triangleTransparencies = model.getFaceTransparencies();
+        Object originalAntialiasing = graphics.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
+        Composite originalComposite = graphics.getComposite();
+
+        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+        graphics.setComposite(AlphaComposite.Clear);
+        graphics.setColor(Color.WHITE);
+
+        for (int i = 0; i < triangleCount; i++)
+        {
+            if (getTriangleDirection(
+                    x2d[tx[i]], y2d[tx[i]],
+                    x2d[ty[i]], y2d[ty[i]],
+                    x2d[tz[i]], y2d[tz[i]]) >= 0)
             {
                 continue;
             }
 
-            Shape hull = player.getConvexHull();
-
-            if (hull != null)
+            if (triangleTransparencies == null || (triangleTransparencies[i] & 255) < 254)
             {
-                actorMasks.add(new Area(hull));
+                graphics.fill(new Polygon(
+                        new int[]{x2d[tx[i]], x2d[ty[i]], x2d[tz[i]]},
+                        new int[]{y2d[tx[i]], y2d[ty[i]], y2d[tz[i]]},
+                        3
+                ));
             }
         }
 
-        return actorMasks;
+        graphics.setComposite(originalComposite);
+        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, originalAntialiasing);
+    }
+
+    private int getTriangleDirection(int x1, int y1, int x2, int y2, int x3, int y3)
+    {
+        int x4 = x2 - x1;
+        int y4 = y2 - y1;
+        int x5 = x3 - x1;
+        int y5 = y3 - y1;
+        return x4 * y5 - y4 * x5;
     }
 
     private void drawTile(Graphics2D graphics, List<Area> npcMasks, WorldPoint worldPoint, Color color)

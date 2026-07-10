@@ -3,6 +3,7 @@ package com.tilegame;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
@@ -15,6 +16,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import javax.swing.AbstractButton;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.BoxLayout;
@@ -106,6 +108,7 @@ class TileGamePanel extends PluginPanel
     {
         SwingUtilities.invokeLater(() ->
         {
+            setInteractiveComponentsEnabled(this, true);
             modeValue.setText(plugin.getMode().name());
             groupValue.setText(blankToDash(plugin.getDisplayedMultiplayerLevelLabel()));
             winnerValue.setText(blankToDash(plugin.getDisplayedMultiplayerWinnerLabel()));
@@ -155,6 +158,10 @@ class TileGamePanel extends PluginPanel
             }
             updateLevelActionButtons();
             updateMultiplayerControls();
+            if (!plugin.isRendererReady())
+            {
+                setInteractiveComponentsEnabled(this, false);
+            }
         });
     }
 
@@ -168,6 +175,10 @@ class TileGamePanel extends PluginPanel
             if (groups.isEmpty())
             {
                 levelsPanel.add(emptyLevelsMessage());
+                if (!plugin.isRendererReady())
+                {
+                    setInteractiveComponentsEnabled(this, false);
+                }
                 levelsPanel.revalidate();
                 levelsPanel.repaint();
                 return;
@@ -177,6 +188,10 @@ class TileGamePanel extends PluginPanel
                     .sorted()
                     .forEach(groupName -> levelsPanel.add(levelRow(groupName)));
 
+            if (!plugin.isRendererReady())
+            {
+                setInteractiveComponentsEnabled(this, false);
+            }
             levelsPanel.revalidate();
             levelsPanel.repaint();
         });
@@ -380,10 +395,10 @@ class TileGamePanel extends PluginPanel
 
     private JPanel actionPanel()
     {
-        JPanel outer = new JPanel(new GridLayout(3, 1, 0, 6));
+        JPanel outer = new JPanel(new GridLayout(4, 1, 0, 6));
         outer.setBackground(PANEL_BACKGROUND);
         outer.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
-        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 108));
+        outer.setMaximumSize(new Dimension(Integer.MAX_VALUE, 144));
 
         JPanel topRow = new JPanel(new GridLayout(1, 3, 5, 0));
         topRow.setBackground(PANEL_BACKGROUND);
@@ -417,6 +432,17 @@ class TileGamePanel extends PluginPanel
         bottomRow.add(clearButton);
         bottomRow.add(importButton);
 
+        JPanel resetRow = new JPanel(new GridLayout(1, 1, 5, 0));
+        resetRow.setBackground(PANEL_BACKGROUND);
+        JButton resetViewButton = actionButton("Fix Camera");
+        resetViewButton.setBackground(new Color(255, 235, 59));
+        resetViewButton.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(179, 149, 0), 2),
+                BorderFactory.createEmptyBorder(5, 4, 5, 4)
+        ));
+        resetViewButton.addActionListener(event -> plugin.hardSceneReset("manual panel reset"));
+        resetRow.add(resetViewButton);
+
         JPanel multiplayerRow = new JPanel(new GridLayout(1, 1, 5, 0));
         multiplayerRow.setBackground(PANEL_BACKGROUND);
         JButton multiplayerButton = actionButton("Multiplayer");
@@ -425,6 +451,7 @@ class TileGamePanel extends PluginPanel
 
         outer.add(topRow);
         outer.add(bottomRow);
+        outer.add(resetRow);
         outer.add(multiplayerRow);
 
         return outer;
@@ -813,6 +840,26 @@ class TileGamePanel extends PluginPanel
     private String blankToDash(String value)
     {
         return value == null || value.isEmpty() ? "-" : value;
+    }
+
+    private void setInteractiveComponentsEnabled(Component component, boolean enabled)
+    {
+        if (component instanceof AbstractButton)
+        {
+            component.setEnabled(enabled);
+        }
+        else if (component instanceof JComboBox)
+        {
+            component.setEnabled(enabled);
+        }
+
+        if (component instanceof Container)
+        {
+            for (Component child : ((Container) component).getComponents())
+            {
+                setInteractiveComponentsEnabled(child, enabled);
+            }
+        }
     }
 
     private void showCardHelp(String title, String helpText)
